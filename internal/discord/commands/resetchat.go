@@ -22,7 +22,7 @@ func (c *resetChatCmd) Execute(ctx context.Context, cmdCtx CommandContext, s *di
 	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
-			Content: responses.MsgChatResetSuccess,
+			Content: responses.ResetChat.Success,
 		},
 	})
 	return nil

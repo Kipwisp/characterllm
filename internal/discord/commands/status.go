@@ -24,7 +24,7 @@ func (c *statusCmd) Execute(ctx context.Context, cmdCtx CommandContext, s *disco
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
-				Content: fmt.Sprintf(responses.MsgStatusOffline, err),
+				Content: fmt.Sprintf(responses.Status.Offline, err),
 			},
 		})
 		return err
@@ -33,7 +33,7 @@ func (c *statusCmd) Execute(ctx context.Context, cmdCtx CommandContext, s *disco
 	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
-			Content: fmt.Sprintf(responses.MsgStatusOnline, latency),
+			Content: fmt.Sprintf(responses.Status.Online, latency),
 		},
 	})
 	return nil

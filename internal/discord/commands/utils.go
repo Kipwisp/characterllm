@@ -12,7 +12,10 @@ import (
 	"github.com/bwmarrin/discordgo"
 )
 
-const avatarUpdateTimeout = 10 * time.Second
+const (
+	avatarUpdateTimeout           = 10 * time.Second
+	MaxSelectMenuDescriptionLength = 100
+)
 
 // updateGuildAvatar updates the bot's avatar for a specific guild using a base64 data URI.
 func updateGuildAvatar(s *discordgo.Session, guildID, avatarDataURI string) error {

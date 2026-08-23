@@ -47,7 +47,7 @@ func (c *setCharacterCmd) Execute(ctx context.Context, cmdCtx CommandContext, s 
 	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
-			Content: fmt.Sprintf(responses.MsgCharCreating, userInput),
+			Content: fmt.Sprintf(responses.SetCharacter.Creating, userInput),
 		},
 	})
 
@@ -71,7 +71,7 @@ func (c *setCharacterCmd) parsePromptOption(s *discordgo.Session, i *discordgo.I
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
-				Content: responses.MsgSetCharMissingPrompt,
+				Content: responses.SetCharacter.SetMissingPrompt,
 			},
 		})
 		return "", fmt.Errorf("missing prompt option")
@@ -150,7 +150,7 @@ func (c *setCharacterCmd) fetchAndSetupCharacter(ctx context.Context, cmdCtx Com
 	latency := time.Since(start)
 	if err != nil {
 		s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
-			Content: utils.PtrString(fmt.Sprintf(responses.MsgCharNotFound, userInput, err)),
+			Content: utils.PtrString(fmt.Sprintf(responses.SetCharacter.NotFound, userInput, err)),
 		})
 		return nil, err
 	}
@@ -265,7 +265,7 @@ func (c *setCharacterCmd) searchAndProcessImages(ctx context.Context, cmdCtx Com
 		options = append(options, discordgo.SelectMenuOption{
 			Label:       fmt.Sprintf("Option %d", idx+1),
 			Value:       strconv.Itoa(idx),
-			Description: utils.TruncateString(img.Title, 100),
+			Description: utils.TruncateString(img.Title, MaxSelectMenuDescriptionLength),
 		})
 	}
 
@@ -303,7 +303,7 @@ func HandleSetCharacterImage(ctx context.Context, cmdCtx CommandContext, s *disc
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
-				Content: responses.MsgNoImageSelected,
+				Content: responses.SetCharacter.NoImageSelected,
 			},
 		})
 		return
@@ -316,7 +316,7 @@ func HandleSetCharacterImage(ctx context.Context, cmdCtx CommandContext, s *disc
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
-				Content: responses.MsgCharImageExpired,
+				Content: responses.SetCharacter.ImageExpired,
 			},
 		})
 		return
@@ -325,7 +325,7 @@ func HandleSetCharacterImage(ctx context.Context, cmdCtx CommandContext, s *disc
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
-				Content: responses.MsgCharImageExpired,
+				Content: responses.SetCharacter.ImageExpired,
 			},
 		})
 		return
@@ -337,7 +337,7 @@ func HandleSetCharacterImage(ctx context.Context, cmdCtx CommandContext, s *disc
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
-				Content: responses.MsgCharImageInvalid,
+				Content: responses.SetCharacter.ImageInvalid,
 				Flags:   discordgo.MessageFlagsEphemeral,
 			},
 		})
@@ -351,7 +351,7 @@ func HandleSetCharacterImage(ctx context.Context, cmdCtx CommandContext, s *disc
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
-				Content: responses.MsgCharImageError,
+				Content: responses.SetCharacter.ImageError,
 			},
 		})
 		return
@@ -364,7 +364,7 @@ func HandleSetCharacterImage(ctx context.Context, cmdCtx CommandContext, s *disc
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
-				Content: responses.MsgCharImageError,
+				Content: responses.SetCharacter.ImageError,
 			},
 		})
 		return
@@ -376,7 +376,7 @@ func HandleSetCharacterImage(ctx context.Context, cmdCtx CommandContext, s *disc
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
-				Content: responses.MsgCharImageError,
+				Content: responses.SetCharacter.ImageError,
 			},
 		})
 		return
@@ -388,7 +388,7 @@ func HandleSetCharacterImage(ctx context.Context, cmdCtx CommandContext, s *disc
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
-				Content: responses.MsgCharImageError,
+				Content: responses.SetCharacter.ImageError,
 			},
 		})
 		return
@@ -400,7 +400,7 @@ func HandleSetCharacterImage(ctx context.Context, cmdCtx CommandContext, s *disc
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
-				Content: responses.MsgCharImageError,
+				Content: responses.SetCharacter.ImageError,
 			},
 		})
 		return
@@ -413,7 +413,7 @@ func HandleSetCharacterImage(ctx context.Context, cmdCtx CommandContext, s *disc
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
-				Content: responses.MsgCharAvatarError,
+				Content: responses.SetCharacter.AvatarError,
 			},
 		})
 		return
@@ -431,7 +431,7 @@ func HandleSetCharacterImage(ctx context.Context, cmdCtx CommandContext, s *disc
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseUpdateMessage,
 			Data: &discordgo.InteractionResponseData{
-				Content: responses.MsgCharSetFinalizationError,
+				Content: responses.SetCharacter.SetFinalizationError,
 			},
 		})
 		return

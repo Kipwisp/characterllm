@@ -70,7 +70,7 @@ func (h *Handlers) MessageCreate(s *discordgo.Session, m *discordgo.MessageCreat
 	details, err := h.getSystemPrompt(ctx, m.GuildID)
 	if err != nil {
 		logger.FromContext(ctx).Error("error constructing system prompt", "error", err)
-		s.ChannelMessageSendReply(m.ChannelID, responses.MsgNoCharacterSet, &discordgo.MessageReference{
+		s.ChannelMessageSendReply(m.ChannelID, responses.General.NoCharacterSet, &discordgo.MessageReference{
 			MessageID: m.ID,
 		})
 		return
@@ -152,7 +152,7 @@ func (h *Handlers) processChat(ctx context.Context, s *discordgo.Session, m *dis
 	fullResponse, reasoning, err := h.LLM.GenerateResponse(ctx, messages, h.BotConfig.LLM.Model)
 	if err != nil {
 		logger.FromContext(ctx).Error("LLM response generation failed", "error", err)
-		s.ChannelMessageSend(m.ChannelID, responses.MsgLLMError)
+		s.ChannelMessageSend(m.ChannelID, responses.General.LLMError)
 		return err
 	}
 	latency := time.Since(start)
@@ -254,5 +254,9 @@ func (h *Handlers) ComponentCreate(s *discordgo.Session, i *discordgo.Interactio
 
 	if i.MessageComponentData().CustomID == "select_char_image" {
 		commands.HandleSetCharacterImage(ctx, h, s, i)
+	} else if i.MessageComponentData().CustomID == "select_character_card" {
+		commands.HandleSelectCharacterCard(ctx, h, s, i)
+	} else if strings.HasPrefix(i.MessageComponentData().CustomID, "list_char_") {
+		commands.HandleListCharactersPagination(ctx, h, s, i)
 	}
 }

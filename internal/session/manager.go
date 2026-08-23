@@ -68,7 +68,7 @@ func (m *Manager) GetCharacterCard(ctx context.Context, guildID, characterID str
 	defer m.mu.RUnlock()
 
 	var card CharacterCard
-	err := m.db.QueryRow("SELECT guild_id, character_id, official_name, series, display_name, description, source_url, modifiers, scenario FROM character_cards WHERE guild_id = ? AND character_id = ?", guildID, characterID).Scan(&card.GuildID, &card.CharacterID, &card.OfficialName, &card.Series, &card.DisplayName, &card.Description, &card.SourceURL, &card.Modifiers, &card.Scenario)
+	err := m.db.QueryRow("SELECT guild_id, character_id, COALESCE(official_name, ''), COALESCE(series, ''), COALESCE(display_name, ''), COALESCE(description, ''), COALESCE(source_url, ''), COALESCE(modifiers, ''), COALESCE(scenario, '') FROM character_cards WHERE guild_id = ? AND character_id = ?", guildID, characterID).Scan(&card.GuildID, &card.CharacterID, &card.OfficialName, &card.Series, &card.DisplayName, &card.Description, &card.SourceURL, &card.Modifiers, &card.Scenario)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -94,7 +94,7 @@ func (m *Manager) GetCardByAlias(ctx context.Context, guildID, alias string) (*C
 	}
 
 	var card CharacterCard
-	err = m.db.QueryRow("SELECT guild_id, character_id, official_name, series, display_name, description, source_url, modifiers, scenario FROM character_cards WHERE guild_id = ? AND character_id = ?", guildID, characterID).Scan(&card.GuildID, &card.CharacterID, &card.OfficialName, &card.Series, &card.DisplayName, &card.Description, &card.SourceURL, &card.Modifiers, &card.Scenario)
+	err = m.db.QueryRow("SELECT guild_id, character_id, COALESCE(official_name, ''), COALESCE(series, ''), COALESCE(display_name, ''), COALESCE(description, ''), COALESCE(source_url, ''), COALESCE(modifiers, ''), COALESCE(scenario, '') FROM character_cards WHERE guild_id = ? AND character_id = ?", guildID, characterID).Scan(&card.GuildID, &card.CharacterID, &card.OfficialName, &card.Series, &card.DisplayName, &card.Description, &card.SourceURL, &card.Modifiers, &card.Scenario)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load card for alias %s in guild %s: %w", alias, guildID, err)
 	}
@@ -135,7 +135,7 @@ func (m *Manager) GetGuildCharacters(ctx context.Context, guildID string) ([]*Ch
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	rows, err := m.db.Query("SELECT guild_id, character_id, official_name, series, display_name, description, source_url, modifiers, scenario FROM character_cards WHERE guild_id = ?", guildID)
+	rows, err := m.db.Query("SELECT guild_id, character_id, COALESCE(official_name, ''), COALESCE(series, ''), COALESCE(display_name, ''), COALESCE(description, ''), COALESCE(source_url, ''), COALESCE(modifiers, ''), COALESCE(scenario, '') FROM character_cards WHERE guild_id = ?", guildID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to retrieve characters for guild %s: %w", guildID, err)
 	}
