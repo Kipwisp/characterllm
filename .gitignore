@@ -1,0 +1,23 @@
+# Secrets
+.env
+.env.local
+.env.*.local
+
+# Binaries and build artifacts
+bin/
+logs/
+images/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.db
+
+# Go test and coverage
+*.test
+*.out
+
+# OS files
+.DS_Store
+Thumbs.db
