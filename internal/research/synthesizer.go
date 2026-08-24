@@ -47,12 +47,12 @@ type CharacterDetails struct {
 // Synthesizer coordinates the process of searching for character data and synthesizing a profile via LLM.
 type Synthesizer struct {
 	searchProvider search.SearchProvider
-	llmClient      *llm.Client
+	llmClient      llm.LLMClient
 	config         *config.Config
 }
 
 // NewSynthesizer creates a new character synthesizer.
-func NewSynthesizer(sp search.SearchProvider, llm *llm.Client, cfg *config.Config) *Synthesizer {
+func NewSynthesizer(sp search.SearchProvider, llm llm.LLMClient, cfg *config.Config) *Synthesizer {
 	return &Synthesizer{
 		searchProvider: sp,
 		llmClient:      llm,

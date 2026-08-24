@@ -19,16 +19,18 @@ import (
 	"github.com/google/uuid"
 )
 
+const compactionBudgetRatio = 0.8
+
 // Handlers manages the interaction between Discord events, LLM generation, and session state.
 type Handlers struct {
-	LLM       *llm.Client
+	LLM       llm.LLMClient
 	Session   *session.Manager
 	BotConfig *config.Config
 	Audit     *audit.AuditLogger
 }
 
 // NewHandlers creates a new Handlers instance with the provided dependencies.
-func NewHandlers(llm *llm.Client, session *session.Manager, cfg *config.Config, audit *audit.AuditLogger) *Handlers {
+func NewHandlers(llm llm.LLMClient, session *session.Manager, cfg *config.Config, audit *audit.AuditLogger) *Handlers {
 	return &Handlers{
 		LLM:       llm,
 		Session:   session,
@@ -41,7 +43,7 @@ func NewHandlers(llm *llm.Client, session *session.Manager, cfg *config.Config, 
 func (h *Handlers) GetSession() *session.Manager { return h.Session }
 
 // GetLLM returns the LLM client.
-func (h *Handlers) GetLLM() *llm.Client { return h.LLM }
+func (h *Handlers) GetLLM() llm.LLMClient { return h.LLM }
 
 // GetConfig returns the bot configuration.
 func (h *Handlers) GetConfig() *config.Config { return h.BotConfig }
@@ -96,7 +98,17 @@ func (h *Handlers) MessageCreate(s *discordgo.Session, m *discordgo.MessageCreat
 	// Append Current Message
 	h.Session.SaveMessage(ctx, m.GuildID, "", "user", prompt)
 	// Get existing history and append to messages
-	history, err := h.Session.GetHistory(ctx, m.GuildID, "")
+	total, err := h.Session.GetHistoryCount(ctx, m.GuildID, "")
+	if err != nil {
+		logger.FromContext(ctx).Error("error getting history count", "error", err)
+		s.ChannelMessageSendReply(m.ChannelID, "Sorry, I had trouble remembering our conversation.", &discordgo.MessageReference{MessageID: m.ID})
+		return
+	}
+	offset := 0
+	if total > 30 {
+		offset = total - 30
+	}
+	history, err := h.Session.GetHistory(ctx, m.GuildID, "", 30, offset)
 	if err != nil {
 		logger.FromContext(ctx).Error("failed to retrieve chat history", "error", err)
 		s.ChannelMessageSendReply(m.ChannelID, "Sorry, I had trouble remembering our conversation.", &discordgo.MessageReference{
@@ -172,35 +184,93 @@ func (h *Handlers) processChat(ctx context.Context, s *discordgo.Session, m *dis
 	return nil
 }
 
-// compactHistory checks if the conversation history exceeds the limit and, if so, prunes old messages and inserts a summary.
+// compactHistory implements history compaction.
+// It preserves a recent memory window and condenses older turns into a summary,
+// ensuring that the compaction request itself stays within the LLM's context limits.
 func (h *Handlers) compactHistory(ctx context.Context, m *discordgo.MessageCreate, charID string, reqID string) {
-	count, err := h.Session.GetHistoryCount(ctx, m.GuildID, "")
+	// 1. Trigger Detection
+	total, err := h.Session.GetHistoryCount(ctx, m.GuildID, "")
 	if err != nil {
 		logger.FromContext(ctx).Error("error getting history count", "error", err)
 		return
 	}
-	if count < 30 {
-		return
+	offset := 0
+	if total > 30 {
+		offset = total - 30
 	}
-
-	logger.FromContext(ctx).Info("history threshold reached, compacting", "guild_id", m.GuildID)
-	oldMsgs, err := h.Session.GetOldestMessages(ctx, m.GuildID, "", 10)
+	history, err := h.Session.GetHistory(ctx, m.GuildID, "", 30, offset)
 	if err != nil {
-		logger.FromContext(ctx).Error("error fetching oldest messages for compaction", "error", err)
+		logger.FromContext(ctx).Error("error fetching history for compaction trigger", "error", err)
 		return
 	}
 
+	// Construct full context for token estimation
+	fullContext := make([]llm.Message, 0, len(history)+1)
+	details, _ := h.getSystemPrompt(ctx, m.GuildID)
+	fullContext = append(fullContext, llm.Message{
+		Role:    "system",
+		Content: fmt.Sprintf("You are %s. %s", details.DisplayName, details.Description),
+	})
+	fullContext = append(fullContext, history...)
+
+	totalTokens := h.LLM.EstimateTokens(ctx, fullContext)
+	maxContext := h.BotConfig.LLM.MaxContext
+	threshold := h.BotConfig.LLM.CompactionThreshold
+
+	if float64(totalTokens)/float64(maxContext) < threshold {
+		return
+	}
+
+	logger.FromContext(ctx).Info("context threshold reached, initiating compaction",
+		"guild_id", m.GuildID,
+		"tokens", totalTokens,
+		"limit", maxContext,
+		"usage", fmt.Sprintf("%.2f%%", (float64(totalTokens)/float64(maxContext))*100))
+
+	// 2. Memory Partitioning
+	// Fetch all turns except the most recent window.
+	recentWindowSize := h.BotConfig.LLM.RecentMemoryWindow
+	olderTurns, err := h.Session.GetHistory(ctx, m.GuildID, "", total-recentWindowSize, 0)
+	if err != nil {
+		logger.FromContext(ctx).Error("error fetching older history for compaction", "error", err)
+		return
+	}
+
+	if len(olderTurns) == 0 {
+		// If there are no older turns to summarize, we don't need to compact.
+		return
+	}
+
+	// Compaction Budgeting (Safety)
 	compactionTemplate, err := os.ReadFile(h.BotConfig.Prompts.CompactionPath)
 	if err != nil {
 		logger.FromContext(ctx).Error("error reading compaction prompt file", "error", err)
 		return
 	}
+	promptMsg := llm.Message{Role: "system", Content: string(compactionTemplate)}
+	promptTokens := h.LLM.EstimateTokens(ctx, []llm.Message{promptMsg})
 
-	summaryPrompt := append([]llm.Message{{
-		Role:    "system",
-		Content: string(compactionTemplate),
-	}}, oldMsgs...)
+	// Cap the total tokens of the summarization request to 80% of max context
+	budget := int(float64(maxContext)*compactionBudgetRatio) - promptTokens
 
+	var messagesToSummarize []llm.Message
+	currentSum := 0
+	for _, msg := range olderTurns {
+		msgTokens := h.LLM.EstimateTokens(ctx, []llm.Message{msg})
+		if currentSum+msgTokens > budget {
+			break
+		}
+		messagesToSummarize = append(messagesToSummarize, msg)
+		currentSum += msgTokens
+	}
+
+	if len(messagesToSummarize) == 0 {
+		logger.FromContext(ctx).Warn("compaction budget too small to summarize any messages", "budget", budget)
+		return
+	}
+
+	// 4. Execution & Rebuild
+	summaryPrompt := append([]llm.Message{promptMsg}, messagesToSummarize...)
 	start := time.Now()
 	summary, reasoning, err := h.LLM.GenerateResponse(ctx, summaryPrompt, h.BotConfig.LLM.Model)
 	if err != nil {
@@ -209,15 +279,14 @@ func (h *Handlers) compactHistory(ctx context.Context, m *discordgo.MessageCreat
 	}
 	latency := time.Since(start)
 
-	if err := h.Session.PruneAndSummarize(ctx, m.GuildID, "", summary, 10); err != nil {
+	if err := h.Session.PruneAndSummarize(ctx, m.GuildID, "", summary, len(messagesToSummarize)); err != nil {
 		logger.FromContext(ctx).Error("error pruning history", "error", err)
 		return
 	}
-	logger.FromContext(ctx).Info("history compacted successfully", "guild_id", m.GuildID)
+	logger.FromContext(ctx).Info("history compacted successfully", "guild_id", m.GuildID, "messages_pruned", len(messagesToSummarize))
 
-	// Also log the compaction reasoning
-	h.Audit.LogConversation(ctx, m.GuildID, charID, "SYSTEM_COMPACTION", reasoning, summary, oldMsgs, latency, reqID)
-
+	// Log the compaction reasoning
+	h.Audit.LogConversation(ctx, m.GuildID, charID, "SYSTEM_COMPACTION", reasoning, summary, messagesToSummarize, latency, reqID)
 }
 
 // InteractionCreate handles Discord slash command interactions.

@@ -220,8 +220,8 @@ func (m *Manager) getCurrentCharacterID(ctx context.Context, guildID string) str
 	return id
 }
 
-// GetHistory retrieves the recent conversation history for a given guild and thread.
-func (m *Manager) GetHistory(ctx context.Context, guildID, threadID string) ([]llm.Message, error) {
+// GetHistory retrieves conversation history for a given guild and thread.
+func (m *Manager) GetHistory(ctx context.Context, guildID, threadID string, limit, offset int) ([]llm.Message, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -232,8 +232,8 @@ func (m *Manager) GetHistory(ctx context.Context, guildID, threadID string) ([]l
 		SELECT role, content FROM chat_history
 		WHERE guild_id = ? AND character_id = ? AND thread_id = ?
 		ORDER BY created_at ASC, id ASC
-		LIMIT ? OFFSET (SELECT MAX(0, COUNT(*) - ?) FROM (SELECT COUNT(*) as cnt FROM chat_history WHERE guild_id = ? AND character_id = ? AND thread_id = ?))`,
-		guildID, charID, threadID, m.maxSize, m.maxSize, guildID, charID, threadID)
+		LIMIT ? OFFSET ?`,
+		guildID, charID, threadID, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query history for guild %s, thread %s: %w", guildID, threadID, err)
 	}

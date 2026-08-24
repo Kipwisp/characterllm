@@ -25,9 +25,12 @@ type DiscordConfig struct {
 }
 
 type LLMConfig struct {
-	URL        string
-	Model      string
-	MaxRetries int
+	URL                 string
+	Model               string
+	MaxRetries          int
+	MaxContext          int
+	CompactionThreshold float64
+	RecentMemoryWindow  int
 }
 
 type PromptConfig struct {
@@ -62,9 +65,12 @@ func LoadConfig() *Config {
 			MainChannel: getEnv("MAIN_CHANNEL", "general"),
 		},
 		LLM: LLMConfig{
-			URL:        getEnv("LLM_URL", "http://localhost:8080/v1/chat/completions"),
-			Model:      getEnv("LLM_MODEL", ""),
-			MaxRetries: getEnvInt("LLM_MAX_RETRIES", 2),
+			URL:                 getEnv("LLM_URL", "http://localhost:8080/v1/chat/completions"),
+			Model:               getEnv("LLM_MODEL", ""),
+			MaxRetries:          getEnvInt("LLM_MAX_RETRIES", 2),
+			MaxContext:          getEnvInt("LLM_MAX_CONTEXT", 4096),
+			CompactionThreshold: getEnvFloat("LLM_COMPACTION_THRESHOLD", 0.9),
+			RecentMemoryWindow:  getEnvInt("LLM_RECENT_MEMORY_WINDOW", 15),
 		},
 		Prompts: PromptConfig{
 			SystemPath:     getEnv("SYSTEM_PROMPT_PATH", "prompts/system_prompt.md"),
@@ -103,4 +109,16 @@ func getEnvInt(key string, fallback int) int {
 		return fallback
 	}
 	return i
+}
+
+func getEnvFloat(key string, fallback float64) float64 {
+	val := getEnv(key, "")
+	if val == "" {
+		return fallback
+	}
+	f, err := strconv.ParseFloat(val, 64)
+	if err != nil {
+		return fallback
+	}
+	return f
 }

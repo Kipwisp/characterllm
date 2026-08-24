@@ -15,7 +15,7 @@ import (
 // CommandContext defines the dependencies available to commands.
 type CommandContext interface {
 	GetSession() *session.Manager
-	GetLLM() *llm.Client
+	GetLLM() llm.LLMClient
 	GetConfig() *config.Config
 	GetAudit() *audit.AuditLogger
 }
