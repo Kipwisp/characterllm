@@ -31,6 +31,8 @@ type LLMConfig struct {
 	MaxContext          int
 	CompactionThreshold float64
 	RecentMemoryWindow  int
+	SummaryMaxTokens    int
+	TimeoutSeconds      int
 }
 
 type PromptConfig struct {
@@ -71,6 +73,8 @@ func LoadConfig() *Config {
 			MaxContext:          getEnvInt("LLM_MAX_CONTEXT", 4096),
 			CompactionThreshold: getEnvFloat("LLM_COMPACTION_THRESHOLD", 0.9),
 			RecentMemoryWindow:  getEnvInt("LLM_RECENT_MEMORY_WINDOW", 15),
+			SummaryMaxTokens:    getEnvInt("LLM_SUMMARY_MAX_TOKENS", 1024),
+			TimeoutSeconds:      getEnvInt("LLM_TIMEOUT_SECONDS", 120),
 		},
 		Prompts: PromptConfig{
 			SystemPath:     getEnv("SYSTEM_PROMPT_PATH", "prompts/system_prompt.md"),

@@ -6,7 +6,31 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
+
+func TestGenerateResponse_Timeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(2 * time.Second)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, 100*time.Millisecond)
+	start := time.Now()
+	_, _, err := client.GenerateResponse(context.Background(), []Message{{Role: "user", Content: "hi"}}, "test")
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected timeout error, got nil")
+	}
+	// With the 100ms client timeout the full retry sequence (3 attempts + 1s/2s backoff)
+	// finishes in ~3.3s; without it the server's 2s sleep per attempt would take ~9s.
+	if elapsed > 5*time.Second {
+		t.Errorf("expected request to abort quickly, took %v", elapsed)
+	}
+}
 
 func TestEstimateTokens(t *testing.T) {
 	tests := []struct {
@@ -66,7 +90,7 @@ func TestEstimateTokens(t *testing.T) {
 			server := httptest.NewServer(tt.serverHandler)
 			defer server.Close()
 
-			client := NewClient(server.URL).(*OpenAIClient)
+			client := NewClient(server.URL, 30*time.Second).(*OpenAIClient)
 			ctx := context.Background()
 
 			tokens := client.EstimateTokens(ctx, tt.messages)
@@ -91,7 +115,7 @@ func TestTokenizationCaching(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.URL).(*OpenAIClient)
+	client := NewClient(server.URL, 30*time.Second).(*OpenAIClient)
 	ctx := context.Background()
 
 	// First call should trigger the network request to verify support
@@ -112,9 +136,9 @@ func TestTokenizationCaching(t *testing.T) {
 
 func TestPing(t *testing.T) {
 	tests := []struct {
-		name       string
-		handler    http.HandlerFunc
-		wantErr    bool
+		name    string
+		handler http.HandlerFunc
+		wantErr bool
 	}{
 		{
 			name: "ping_success",
@@ -141,7 +165,7 @@ func TestPing(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(tt.handler))
 			defer server.Close()
 
-			client := NewClient(server.URL)
+			client := NewClient(server.URL, 30*time.Second)
 			_, err := client.Ping(context.Background())
 
 			if (err != nil) != tt.wantErr {
@@ -204,7 +228,7 @@ func TestGenerateResponse(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(tt.handler))
 			defer server.Close()
 
-			client := NewClient(server.URL)
+			client := NewClient(server.URL, 30*time.Second)
 			resp, reason, err := client.GenerateResponse(context.Background(), tt.messages, tt.model)
 
 			if (err != nil) != tt.wantErr {
@@ -240,7 +264,7 @@ func TestGenerateResponse_Retry(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.URL)
+	client := NewClient(server.URL, 30*time.Second)
 	resp, reason, err := client.GenerateResponse(context.Background(), []Message{{Role: "user", Content: "Hi"}}, "model")
 
 	if err != nil {

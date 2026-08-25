@@ -3,7 +3,26 @@ package search
 
 import (
 	"context"
+	"fmt"
+	"strings"
 )
+
+// Provider names.
+const ProviderSearXNG = "searxng"
+
+// NewProvider creates a search provider based on the provided name.
+func NewProvider(name string, url string) (SearchProvider, ImageSearchProvider, error) {
+	switch strings.ToLower(name) {
+	case ProviderSearXNG:
+		if url == "" {
+			return nil, nil, fmt.Errorf("SearXNG URL is required for provider %s", ProviderSearXNG)
+		}
+		p := NewSearXNGProvider(url)
+		return p, p, nil
+	default:
+		return nil, nil, fmt.Errorf("unsupported search provider: %s", name)
+	}
+}
 
 // SearchResult represents a single result from a web search.
 type SearchResult struct {

@@ -6,12 +6,14 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"characterllm/internal/audit"
 	"characterllm/internal/config"
 	"characterllm/internal/discord"
 	"characterllm/internal/llm"
 	"characterllm/internal/logger"
+	"characterllm/internal/prompts"
 	"characterllm/internal/session"
 )
 
@@ -27,21 +29,18 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Initialize LLM Client
-	llmClient := llm.NewClient(cfg.LLM.URL)
-
-	// Initialize Session Manager
-	var defaultPrompt string
-	if cfg.Prompts.SystemPath != "" {
-		content, err := os.ReadFile(cfg.Prompts.SystemPath)
-		if err != nil {
-			slog.Warn("could not read system prompt file", "path", cfg.Prompts.SystemPath, "error", err)
-		} else {
-			defaultPrompt = string(content)
-		}
+	// Load prompt templates; fail fast if any file is missing or unreadable
+	promptSet, err := prompts.Load(cfg.Prompts.SystemPath, cfg.Prompts.CompactionPath, cfg.Prompts.SynthesisPath, cfg.Prompts.AnalyzerPath)
+	if err != nil {
+		slog.Error("failed to load prompt files", "error", err)
+		os.Exit(1)
 	}
 
-	sessionMgr, err := session.NewManager("bot_sessions.db", defaultPrompt)
+	// Initialize LLM Client
+	llmClient := llm.NewClient(cfg.LLM.URL, time.Duration(cfg.LLM.TimeoutSeconds)*time.Second)
+
+	// Initialize Session Manager
+	sessionMgr, err := session.NewManager("bot_sessions.db", promptSet.System)
 	if err != nil {
 		slog.Error("failed to initialize session manager", "error", err)
 		os.Exit(1)
@@ -50,7 +49,11 @@ func main() {
 
 	// Setup Discord Handlers (Pass config for model name)
 	auditLogger := audit.NewAuditLogger("logs")
-	handlers := discord.NewHandlers(llmClient, sessionMgr, cfg, auditLogger)
+	handlers, err := discord.NewHandlers(llmClient, sessionMgr, cfg, auditLogger, promptSet)
+	if err != nil {
+		slog.Error("failed to initialize discord handlers", "error", err)
+		os.Exit(1)
+	}
 
 	// Initialize and Start Discord Bot
 	bot, err := discord.NewBot(cfg.Discord.Token, handlers)

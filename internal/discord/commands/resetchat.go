@@ -1,8 +1,8 @@
 package commands
 
 import (
-	"context"
 	"characterllm/internal/responses"
+	"context"
 	"github.com/bwmarrin/discordgo"
 )
 
@@ -17,7 +17,7 @@ func (c *resetChatCmd) Definition() *discordgo.ApplicationCommand {
 }
 
 // Execute clears the conversation history for the guild.
-func (c *resetChatCmd) Execute(ctx context.Context, cmdCtx CommandContext, s *discordgo.Session, i *discordgo.InteractionCreate) error {
+func (c *resetChatCmd) Execute(ctx context.Context, cmdCtx CommandContext, s DiscordSession, i *discordgo.InteractionCreate) error {
 	cmdCtx.GetSession().ClearHistory(ctx, i.GuildID, "")
 	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,

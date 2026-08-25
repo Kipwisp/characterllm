@@ -29,13 +29,16 @@ type LlamaResponse struct {
 // OpenAIClient handles communication with an OpenAI-compatible LLM server (e.g., llama.cpp).
 type OpenAIClient struct {
 	URL                   string
+	client                *http.Client
 	tokenizationSupported bool
 	tokenizationTested    bool
 }
 
 // NewClient creates a new LLM client instance. Currently returns an OpenAIClient.
-func NewClient(url string) LLMClient {
-	return &OpenAIClient{URL: url}
+// The timeout bounds every request so a stalled server surfaces as an error
+// instead of blocking the caller indefinitely.
+func NewClient(url string, timeout time.Duration) LLMClient {
+	return &OpenAIClient{URL: url, client: &http.Client{Timeout: timeout}}
 }
 
 // Ping checks if the LLM server is reachable and returns the response latency.
@@ -54,7 +57,7 @@ func (c *OpenAIClient) Ping(ctx context.Context) (time.Duration, error) {
 		return 0, err
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := c.client.Do(req)
 	if err != nil {
 		return 0, err
 	}
@@ -126,7 +129,7 @@ func (c *OpenAIClient) fetchRemoteTokens(ctx context.Context, messages []Message
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := c.client.Do(req)
 	if err != nil {
 		return 0, err
 	}
@@ -158,67 +161,62 @@ func (c *OpenAIClient) GenerateResponse(ctx context.Context, messages []Message,
 		return "", "", err
 	}
 
-	var lastErr error
-	maxRetries := 3
+	const maxRetries = 3
 	backoff := 1 * time.Second
+	var lastErr error
 
-	for i := range maxRetries {
-		req, err := http.NewRequestWithContext(ctx, "POST", c.URL, bytes.NewBuffer(jsonData))
-		if err != nil {
-			return "", "", fmt.Errorf("failed to create request: %v", err)
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		content, reasoning, retryable, err := c.doGenerate(ctx, jsonData, attempt, maxRetries)
+		if err == nil {
+			return content, reasoning, nil
 		}
-		req.Header.Set("Content-Type", "application/json")
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			lastErr = fmt.Errorf("request failed (attempt %d/%d): %v", i+1, maxRetries, err)
-			logger.FromContext(ctx).Debug("LLM request attempt failed", "attempt", i+1, "error", err)
-			time.Sleep(backoff)
-			backoff *= 2
-			continue
+		lastErr = err
+		if !retryable || attempt == maxRetries {
+			break
 		}
-
-		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			lastErr = fmt.Errorf("server returned non-OK status: %d, body: %s (attempt %d/%d)", resp.StatusCode, string(body), i+1, maxRetries)
-
-			// Only retry on 5xx errors (server errors) or 429 (too many requests)
-			if resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests {
-				time.Sleep(backoff)
-				backoff *= 2
-				continue
-			}
-			// For 4xx errors (other than 429), retrying usually won't help
-			return "", "", lastErr
-		}
-
-		body, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			lastErr = fmt.Errorf("failed to read response body: %v", err)
-			time.Sleep(backoff)
-			backoff *= 2
-			continue
-		}
-
-		var llamaResp LlamaResponse
-		if err := json.Unmarshal(body, &llamaResp); err != nil {
-			lastErr = fmt.Errorf("failed to unmarshal JSON: %v", err)
-			time.Sleep(backoff)
-			backoff *= 2
-			continue
-		}
-
-		if len(llamaResp.Choices) > 0 {
-			choice := llamaResp.Choices[0].Message
-			return choice.Content, choice.Reasoning, nil
-		}
-
-		lastErr = fmt.Errorf("no response from llama.cpp (attempt %d/%d)", i+1, maxRetries)
 		time.Sleep(backoff)
 		backoff *= 2
 	}
 
 	return "", "", fmt.Errorf("all %d retries failed: %v", maxRetries, lastErr)
+}
+
+// doGenerate performs a single LLM request. The boolean result indicates whether
+// retrying is worthwhile (transport errors, 5xx, 429); other 4xx errors are not.
+func (c *OpenAIClient) doGenerate(ctx context.Context, jsonData []byte, attempt, maxRetries int) (string, string, bool, error) {
+	req, err := http.NewRequestWithContext(ctx, "POST", c.URL, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return "", "", false, fmt.Errorf("failed to create request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		logger.FromContext(ctx).Debug("LLM request attempt failed", "attempt", attempt, "error", err)
+		return "", "", true, fmt.Errorf("request failed (attempt %d/%d): %v", attempt, maxRetries, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		retryable := resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests
+		return "", "", retryable, fmt.Errorf("server returned non-OK status: %d, body: %s (attempt %d/%d)", resp.StatusCode, string(body), attempt, maxRetries)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", "", true, fmt.Errorf("failed to read response body: %v", err)
+	}
+
+	var llamaResp LlamaResponse
+	if err := json.Unmarshal(body, &llamaResp); err != nil {
+		return "", "", true, fmt.Errorf("failed to unmarshal JSON: %v", err)
+	}
+
+	if len(llamaResp.Choices) > 0 {
+		choice := llamaResp.Choices[0].Message
+		return choice.Content, choice.Reasoning, false, nil
+	}
+
+	return "", "", true, fmt.Errorf("no response from llama.cpp (attempt %d/%d)", attempt, maxRetries)
 }

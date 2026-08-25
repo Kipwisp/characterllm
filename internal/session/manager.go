@@ -192,9 +192,24 @@ func (m *Manager) initDB() error {
 			thread_id TEXT,
 			role TEXT,
 			content TEXT,
+			tokens INTEGER DEFAULT 0,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		);`,
-		`CREATE INDEX IF NOT EXISTS idx_history_guild ON chat_history(guild_id);`,
+		`CREATE TABLE IF NOT EXISTS conversation_summaries (
+			guild_id TEXT,
+			character_id TEXT,
+			thread_id TEXT,
+			content TEXT,
+			tokens INTEGER DEFAULT 0,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (guild_id, character_id, thread_id)
+		);`,
+		`CREATE TABLE IF NOT EXISTS session_stats (
+			guild_id TEXT,
+			thread_id TEXT,
+			total_tokens INTEGER DEFAULT 0,
+			PRIMARY KEY (guild_id, thread_id)
+		);`,
 	}
 
 	for _, q := range queries {
@@ -208,12 +223,33 @@ func (m *Manager) initDB() error {
 		return fmt.Errorf("failed to create character history index: %v", err)
 	}
 
+	if err := m.migrateChatHistoryTokens(); err != nil {
+		return fmt.Errorf("failed to migrate chat_history tokens column: %v", err)
+	}
+
+	return nil
+}
+
+// migrateChatHistoryTokens adds the tokens column to chat_history for databases
+// created before the column existed.
+func (m *Manager) migrateChatHistoryTokens() error {
+	var count int
+	err := m.db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('chat_history') WHERE name = 'tokens'").Scan(&count)
+	if err != nil {
+		return fmt.Errorf("failed to inspect chat_history schema: %w", err)
+	}
+	if count > 0 {
+		return nil
+	}
+	if _, err := m.db.Exec("ALTER TABLE chat_history ADD COLUMN tokens INTEGER DEFAULT 0"); err != nil {
+		return fmt.Errorf("failed to add tokens column to chat_history: %w", err)
+	}
 	return nil
 }
 
 func (m *Manager) getCurrentCharacterID(ctx context.Context, guildID string) string {
 	var id string
-	err := m.db.QueryRow("SELECT active_character_id FROM guild_config WHERE guild_id = ?", guildID).Scan(&id)
+	err := m.db.QueryRowContext(ctx, "SELECT active_character_id FROM guild_config WHERE guild_id = ?", guildID).Scan(&id)
 	if err != nil {
 		return ""
 	}
@@ -255,16 +291,30 @@ func (m *Manager) GetHistory(ctx context.Context, guildID, threadID string, limi
 }
 
 // SaveMessage persists a new message to the chat history for a guild and thread.
-func (m *Manager) SaveMessage(ctx context.Context, guildID, threadID, role string, content string) error {
+func (m *Manager) SaveMessage(ctx context.Context, guildID, threadID, role string, content string, tokens int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	charID := m.getCurrentCharacterID(ctx, guildID)
-	_, err := m.db.Exec("INSERT INTO chat_history (guild_id, character_id, thread_id, role, content) VALUES (?, ?, ?, ?, ?)", guildID, charID, threadID, role, content)
+	tx, err := m.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	_, err = tx.Exec("INSERT INTO chat_history (guild_id, character_id, thread_id, role, content, tokens) VALUES (?, ?, ?, ?, ?, ?)", guildID, charID, threadID, role, content, tokens)
 	if err != nil {
 		return fmt.Errorf("failed to save message for guild %s, thread %s: %w", guildID, threadID, err)
 	}
-	return nil
+
+	_, err = tx.Exec(`INSERT INTO session_stats (guild_id, thread_id, total_tokens) VALUES (?, ?, ?)
+		 ON CONFLICT(guild_id, thread_id) DO UPDATE SET total_tokens = total_tokens + excluded.total_tokens`,
+		guildID, threadID, tokens)
+	if err != nil {
+		return fmt.Errorf("failed to update session stats for guild %s, thread %s: %w", guildID, threadID, err)
+	}
+
+	return tx.Commit()
 }
 
 // SetActiveCharacter updates or creates the active character for a guild.
@@ -338,17 +388,50 @@ func (m *Manager) GetCharacterDetails(ctx context.Context, guildID string) (*Cha
 	return &details, nil
 }
 
+// GetTotalTokens returns the total token count for a guild and thread.
+func (m *Manager) GetTotalTokens(ctx context.Context, guildID, threadID string) (int, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var total int
+	err := m.db.QueryRow(`SELECT total_tokens FROM session_stats WHERE guild_id = ? AND thread_id = ?`, guildID, threadID).Scan(&total)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("failed to get total tokens for guild %s, thread %s: %w", guildID, threadID, err)
+	}
+	return total, nil
+}
+
 // ClearHistory deletes all chat history for the current character in a guild and thread.
 func (m *Manager) ClearHistory(ctx context.Context, guildID, threadID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	charID := m.getCurrentCharacterID(ctx, guildID)
-	_, err := m.db.Exec("DELETE FROM chat_history WHERE guild_id = ? AND character_id = ? AND thread_id = ?", guildID, charID, threadID)
+	tx, err := m.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	_, err = tx.Exec("DELETE FROM chat_history WHERE guild_id = ? AND character_id = ? AND thread_id = ?", guildID, charID, threadID)
 	if err != nil {
 		return fmt.Errorf("failed to clear history for guild %s, thread %s: %w", guildID, threadID, err)
 	}
-	return nil
+
+	_, err = tx.Exec("DELETE FROM session_stats WHERE guild_id = ? AND thread_id = ?", guildID, threadID)
+	if err != nil {
+		return fmt.Errorf("failed to clear session stats for guild %s, thread %s: %w", guildID, threadID, err)
+	}
+
+	_, err = tx.Exec("DELETE FROM conversation_summaries WHERE guild_id = ? AND character_id = ? AND thread_id = ?", guildID, charID, threadID)
+	if err != nil {
+		return fmt.Errorf("failed to clear summary for guild %s, thread %s: %w", guildID, threadID, err)
+	}
+
+	return tx.Commit()
 }
 
 // GetHistoryCount returns the total number of messages in the history for a guild and thread.
@@ -365,54 +448,80 @@ func (m *Manager) GetHistoryCount(ctx context.Context, guildID, threadID string)
 	return count, nil
 }
 
-// GetOldestMessages retrieves the specified number of oldest messages for a guild and thread.
-func (m *Manager) GetOldestMessages(ctx context.Context, guildID, threadID string, count int) ([]llm.Message, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	charID := m.getCurrentCharacterID(ctx, guildID)
-	var messages []llm.Message
-	rows, err := m.db.Query("SELECT role, content FROM chat_history WHERE guild_id = ? AND character_id = ? AND thread_id = ? ORDER BY created_at ASC LIMIT ?", guildID, charID, threadID, count)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch oldest messages for guild %s, thread %s: %w", guildID, threadID, err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var msg llm.Message
-		if err := rows.Scan(&msg.Role, &msg.Content); err != nil {
-			return nil, fmt.Errorf("failed to scan oldest message for guild %s: %w", guildID, err)
-		}
-		messages = append(messages, msg)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error during oldest messages row iteration for guild %s: %w", guildID, err)
-	}
-
-	return messages, nil
-}
-
-// PruneAndSummarize removes the oldest messages and replaces them with a summary message.
-func (m *Manager) PruneAndSummarize(ctx context.Context, guildID, threadID string, summary string, deletedCount int) error {
+// PruneAndSummarize removes the oldest messages and replaces them with a rolling
+// summary stored in conversation_summaries. Session token stats are adjusted in
+// the same transaction.
+func (m *Manager) PruneAndSummarize(ctx context.Context, guildID, threadID string, summary string, deletedCount int, summaryTokens int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	charID := m.getCurrentCharacterID(ctx, guildID)
-	var maxID int
-	err := m.db.QueryRow("SELECT id FROM chat_history WHERE guild_id = ? AND character_id = ? AND thread_id = ? ORDER BY created_at ASC LIMIT 1 OFFSET ?", guildID, charID, threadID, deletedCount-1).Scan(&maxID)
+	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("failed to find boundary ID for pruning for guild %s, thread %s: %w", guildID, threadID, err)
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	var deletedTokens int
+	if deletedCount > 0 {
+		var maxID int
+		err = tx.QueryRow("SELECT id FROM chat_history WHERE guild_id = ? AND character_id = ? AND thread_id = ? ORDER BY created_at ASC, id ASC LIMIT 1 OFFSET ?", guildID, charID, threadID, deletedCount-1).Scan(&maxID)
+		if err != nil {
+			return fmt.Errorf("failed to find boundary ID for pruning for guild %s, thread %s: %w", guildID, threadID, err)
+		}
+
+		err = tx.QueryRow("SELECT COALESCE(SUM(tokens), 0) FROM chat_history WHERE guild_id = ? AND character_id = ? AND thread_id = ? AND id <= ?", guildID, charID, threadID, maxID).Scan(&deletedTokens)
+		if err != nil {
+			return fmt.Errorf("failed to sum pruned tokens for guild %s, thread %s: %w", guildID, threadID, err)
+		}
+
+		_, err = tx.Exec("DELETE FROM chat_history WHERE guild_id = ? AND character_id = ? AND thread_id = ? AND id <= ?", guildID, charID, threadID, maxID)
+		if err != nil {
+			return fmt.Errorf("failed to prune history for guild %s, thread %s: %w", guildID, threadID, err)
+		}
 	}
 
-	_, err = m.db.Exec("DELETE FROM chat_history WHERE guild_id = ? AND character_id = ? AND thread_id = ? AND id <= ?", guildID, charID, threadID, maxID)
+	_, err = tx.Exec(`INSERT INTO conversation_summaries (guild_id, character_id, thread_id, content, tokens)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(guild_id, character_id, thread_id) DO UPDATE SET
+			content = excluded.content,
+			tokens = excluded.tokens,
+			created_at = CURRENT_TIMESTAMP`,
+		guildID, charID, threadID, summary, summaryTokens)
 	if err != nil {
-		return fmt.Errorf("failed to prune history for guild %s, thread %s: %w", guildID, threadID, err)
+		return fmt.Errorf("failed to upsert summary for guild %s, thread %s: %w", guildID, threadID, err)
 	}
 
-	_, err = m.db.Exec("INSERT INTO chat_history (guild_id, character_id, thread_id, role, content) VALUES (?, ?, ?, ?, ?)", guildID, charID, threadID, "system", "Summary of previous conversation: "+summary)
+	insertTokens := summaryTokens - deletedTokens
+	if insertTokens < 0 {
+		insertTokens = 0
+	}
+	_, err = tx.Exec(`INSERT INTO session_stats (guild_id, thread_id, total_tokens) VALUES (?, ?, ?)
+		ON CONFLICT(guild_id, thread_id) DO UPDATE SET total_tokens = MAX(0, total_tokens - ? + ?)`,
+		guildID, threadID, insertTokens, deletedTokens, summaryTokens)
 	if err != nil {
-		return fmt.Errorf("failed to insert summary for guild %s, thread %s: %w", guildID, threadID, err)
+		return fmt.Errorf("failed to update session stats for guild %s, thread %s: %w", guildID, threadID, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit prune transaction for guild %s, thread %s: %w", guildID, threadID, err)
 	}
 	return nil
+}
+
+// GetSummary returns the rolling conversation summary for a guild and thread, or an empty string if none exists.
+func (m *Manager) GetSummary(ctx context.Context, guildID, threadID string) (string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	charID := m.getCurrentCharacterID(ctx, guildID)
+	var summary string
+	err := m.db.QueryRow("SELECT content FROM conversation_summaries WHERE guild_id = ? AND character_id = ? AND thread_id = ?", guildID, charID, threadID).Scan(&summary)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return "", nil
+		}
+		return "", fmt.Errorf("failed to get summary for guild %s, thread %s: %w", guildID, threadID, err)
+	}
+	return summary, nil
 }

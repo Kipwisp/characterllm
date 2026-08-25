@@ -20,7 +20,7 @@ func CreateCharacterSlug(name string, modifiers []string, scenarioID string) str
 	copy(sortedMods, modifiers)
 	sort.Strings(sortedMods)
 
-	modsSlug := strings.ToLower(strings.Join(sortedMods, "_"))
+	modsSlug := strings.ToLower(strings.ReplaceAll(strings.Join(sortedMods, "_"), " ", "_"))
 	nameSlug := strings.ToLower(strings.ReplaceAll(name, " ", "_"))
 	scenarioSlug := strings.ToLower(scenarioID)
 

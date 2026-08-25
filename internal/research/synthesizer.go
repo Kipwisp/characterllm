@@ -5,12 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 
 	"characterllm/internal/config"
 	"characterllm/internal/llm"
 	"characterllm/internal/logger"
+	"characterllm/internal/prompts"
 	"characterllm/internal/search"
 )
 
@@ -44,30 +44,33 @@ type CharacterDetails struct {
 	URL         string
 }
 
+// Synthesizer defines the interface for analyzing user input and synthesizing character personas.
+type Synthesizer interface {
+	AnalyzeInput(ctx context.Context, input string) (*AnalysisResult, string, string, error)
+	FetchCharacter(ctx context.Context, analysis *AnalysisResult) (*SynthesisResult, error)
+}
+
 // Synthesizer coordinates the process of searching for character data and synthesizing a profile via LLM.
-type Synthesizer struct {
+type SynthesizerClient struct {
 	searchProvider search.SearchProvider
 	llmClient      llm.LLMClient
 	config         *config.Config
+	prompts        *prompts.Set
 }
 
 // NewSynthesizer creates a new character synthesizer.
-func NewSynthesizer(sp search.SearchProvider, llm llm.LLMClient, cfg *config.Config) *Synthesizer {
-	return &Synthesizer{
+func NewSynthesizer(sp search.SearchProvider, llm llm.LLMClient, cfg *config.Config, ps *prompts.Set) Synthesizer {
+	return &SynthesizerClient{
 		searchProvider: sp,
 		llmClient:      llm,
 		config:         cfg,
+		prompts:        ps,
 	}
 }
 
 // AnalyzeInput deconstructs the user's request into a structured analysis result.
-func (s *Synthesizer) AnalyzeInput(ctx context.Context, input string) (*AnalysisResult, string, string, error) {
-	template, err := os.ReadFile(s.config.Prompts.AnalyzerPath)
-	if err != nil {
-		return nil, "", "", fmt.Errorf("failed to read analyzer prompt: %w", err)
-	}
-
-	prompt := strings.Replace(string(template), "{{INPUT}}", input, 1)
+func (s *SynthesizerClient) AnalyzeInput(ctx context.Context, input string) (*AnalysisResult, string, string, error) {
+	prompt := strings.Replace(s.prompts.Analyzer, "{{INPUT}}", input, 1)
 	messages := []llm.Message{{Role: "user", Content: prompt}}
 
 	var lastResponse, lastReasoning string
@@ -104,7 +107,7 @@ func (s *Synthesizer) AnalyzeInput(ctx context.Context, input string) (*Analysis
 }
 
 // FetchCharacter performs a web search and uses an LLM to synthesize a structured character profile.
-func (s *Synthesizer) FetchCharacter(ctx context.Context, analysis *AnalysisResult) (*SynthesisResult, error) {
+func (s *SynthesizerClient) FetchCharacter(ctx context.Context, analysis *AnalysisResult) (*SynthesisResult, error) {
 	logger.FromContext(ctx).Info("beginning character research", "target", analysis.OfficialName)
 
 	// 1. Research: Search for the canonical character
@@ -128,11 +131,6 @@ func (s *Synthesizer) FetchCharacter(ctx context.Context, analysis *AnalysisResu
 	}
 
 	// 3. Synthesis: Use LLM to create the profile
-	template, err := os.ReadFile(s.config.Prompts.SynthesisPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read synthesis prompt: %w", err)
-	}
-
 	// Inject the modifiers into the prompt if any exist
 	modifierInstruction := ""
 	if len(analysis.Modifiers) > 0 {
@@ -140,7 +138,7 @@ func (s *Synthesizer) FetchCharacter(ctx context.Context, analysis *AnalysisResu
 		modifierInstruction = fmt.Sprintf("\nIMPORTANT: The user has requested a MODIFIED version of this character: %s. You MUST merge the canonical research provided below with the traits, psychology, and physical changes implied by the modifiers '%s'.", mods, mods)
 	}
 
-	prompt := strings.Replace(string(template), "{{RESULTS}}", dossier.String(), 1)
+	prompt := strings.Replace(s.prompts.Synthesis, "{{RESULTS}}", dossier.String(), 1)
 
 	scenarioBlock := ""
 	if analysis.Scenario != "" {
@@ -182,7 +180,7 @@ func (s *Synthesizer) FetchCharacter(ctx context.Context, analysis *AnalysisResu
 }
 
 // parseSynthesis extracts a SynthesisResult from the LLM's formatted response.
-func (s *Synthesizer) parseSynthesis(output string) *SynthesisResult {
+func (s *SynthesizerClient) parseSynthesis(output string) *SynthesisResult {
 	if strings.HasPrefix(output, "STATUS: UNKNOWN") {
 		return &SynthesisResult{Status: "UNKNOWN"}
 	}

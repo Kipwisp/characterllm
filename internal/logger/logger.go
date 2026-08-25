@@ -41,7 +41,7 @@ func (h *bracketHandler) Handle(ctx context.Context, r slog.Record) error {
 
 	// Start building the log line
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "[%s] %-5s %s", ts, lvl, r.Message)
+	fmt.Fprintf(&sb, "[%s] %s %s", ts, lvl, r.Message)
 
 	// Collect attributes from the handler itself (fixed attributes)
 	var allAttrs []slog.Attr

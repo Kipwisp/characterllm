@@ -3,10 +3,10 @@
 package discord
 
 import (
+	"characterllm/internal/discord/commands"
 	"context"
 	"log/slog"
 
-	"characterllm/internal/discord/commands"
 	"github.com/bwmarrin/discordgo"
 )
 
@@ -40,9 +40,9 @@ func (b *Bot) Start() error {
 		return err
 	}
 
-	slog.Info("bot logged in", 
-		"username", b.Session.State.User.Username, 
-		"discriminator", b.Session.State.User.Discriminator, 
+	slog.Info("bot logged in",
+		"username", b.Session.State.User.Username,
+		"discriminator", b.Session.State.User.Discriminator,
 		"user_id", b.Session.State.User.ID,
 	)
 

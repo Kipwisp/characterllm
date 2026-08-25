@@ -1,9 +1,9 @@
 package commands
 
 import (
+	"characterllm/internal/responses"
 	"context"
 	"fmt"
-	"characterllm/internal/responses"
 	"github.com/bwmarrin/discordgo"
 )
 
@@ -18,7 +18,7 @@ func (c *statusCmd) Definition() *discordgo.ApplicationCommand {
 }
 
 // Execute pings the LLM server and returns the latency to the user.
-func (c *statusCmd) Execute(ctx context.Context, cmdCtx CommandContext, s *discordgo.Session, i *discordgo.InteractionCreate) error {
+func (c *statusCmd) Execute(ctx context.Context, cmdCtx CommandContext, s DiscordSession, i *discordgo.InteractionCreate) error {
 	latency, err := cmdCtx.GetLLM().Ping(ctx)
 	if err != nil {
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{

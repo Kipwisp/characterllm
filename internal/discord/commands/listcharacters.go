@@ -24,11 +24,11 @@ func (c *listCharactersCmd) Definition() *discordgo.ApplicationCommand {
 }
 
 // Execute handles the process of listing characters and providing a selection menu.
-func (c *listCharactersCmd) Execute(ctx context.Context, cmdCtx CommandContext, s *discordgo.Session, i *discordgo.InteractionCreate) error {
+func (c *listCharactersCmd) Execute(ctx context.Context, cmdCtx CommandContext, s DiscordSession, i *discordgo.InteractionCreate) error {
 	return renderCharacterList(ctx, cmdCtx, s, i, 0, true)
 }
 
-func renderCharacterList(ctx context.Context, cmdCtx CommandContext, s *discordgo.Session, i *discordgo.InteractionCreate, page int, isInitialResponse bool) error {
+func renderCharacterList(ctx context.Context, cmdCtx CommandContext, s DiscordSession, i *discordgo.InteractionCreate, page int, isInitialResponse bool) error {
 	cards, err := cmdCtx.GetSession().GetGuildCharacters(ctx, i.GuildID)
 	if err != nil {
 		logger.FromContext(ctx).Error("failed to retrieve characters", "error", err, "guild_id", i.GuildID)
@@ -146,7 +146,7 @@ func renderCharacterList(ctx context.Context, cmdCtx CommandContext, s *discordg
 }
 
 // HandleListCharactersPagination processes the "Next" and "Prev" buttons for the character list.
-func HandleListCharactersPagination(ctx context.Context, cmdCtx CommandContext, s *discordgo.Session, i *discordgo.InteractionCreate) {
+func HandleListCharactersPagination(ctx context.Context, cmdCtx CommandContext, s DiscordSession, i *discordgo.InteractionCreate) {
 	customID := i.MessageComponentData().CustomID
 	parts := strings.Split(customID, "_")
 	if len(parts) < 4 {
@@ -172,7 +172,7 @@ func HandleListCharactersPagination(ctx context.Context, cmdCtx CommandContext, 
 }
 
 // HandleSelectCharacterCard processes the user's selection of a character card.
-func HandleSelectCharacterCard(ctx context.Context, cmdCtx CommandContext, s *discordgo.Session, i *discordgo.InteractionCreate) {
+func HandleSelectCharacterCard(ctx context.Context, cmdCtx CommandContext, s DiscordSession, i *discordgo.InteractionCreate) {
 	if len(i.MessageComponentData().Values) == 0 {
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
