@@ -25,7 +25,7 @@ func TestBuild_BelowSoftTargetNotTriggered(t *testing.T) {
 
 	userTokens := f.llm.EstimateTokens(ctx, []llm.Message{{Role: "user", Content: "current"}})
 	messages, compactionNeeded, err := NewPromptBuilder(f.llm, f.sm, f.cfg, f.ps).
-		Build(ctx, testGuildID, testThread, details, "current", userTokens)
+		Build(ctx, testGuildID, testThread, details, "current", nil, userTokens)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,6 +39,42 @@ func TestBuild_BelowSoftTargetNotTriggered(t *testing.T) {
 	}
 	if strings.Contains(messages[0].Content, "summary of earlier turns") {
 		t.Error("Expected no summary pointer in system prompt when no summary exists")
+	}
+}
+
+func TestBuild_ImagesAttachedToCurrentMessage(t *testing.T) {
+	f := setupConversation(t)
+	ctx := context.Background()
+	f.cfg.LLM.MaxContext = 1000
+	f.cfg.LLM.CompactionThreshold = 0.9
+	f.llm.EstimateTokensFn = func(ctx context.Context, msgs []llm.Message) int { return 10 }
+	f.seed(t, 2, "Msg %d")
+	f.saveCurrent(t)
+
+	details, err := f.sm.GetCharacterDetails(ctx, testGuildID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	userTokens := f.llm.EstimateTokens(ctx, []llm.Message{{Role: "user", Content: "current"}})
+	images := []string{"data:image/jpeg;base64,abc"}
+	messages, _, err := NewPromptBuilder(f.llm, f.sm, f.cfg, f.ps).
+		Build(ctx, testGuildID, testThread, details, "current", images, userTokens)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	last := messages[len(messages)-1]
+	if last.Role != "user" || last.Content != "current" {
+		t.Fatalf("unexpected final message: %+v", last)
+	}
+	if len(last.Images) != 1 || last.Images[0] != "data:image/jpeg;base64,abc" {
+		t.Errorf("expected images on the current message, got %v", last.Images)
+	}
+	for _, msg := range messages[:len(messages)-1] {
+		if len(msg.Images) != 0 {
+			t.Errorf("images must not leak onto other messages: %+v", msg)
+		}
 	}
 }
 
@@ -60,7 +96,7 @@ func TestBuild_SoftTargetTriggersWithoutTruncation(t *testing.T) {
 
 	userTokens := f.llm.EstimateTokens(ctx, []llm.Message{{Role: "user", Content: "current"}})
 	messages, compactionNeeded, err := NewPromptBuilder(f.llm, f.sm, f.cfg, f.ps).
-		Build(ctx, testGuildID, testThread, details, "current", userTokens)
+		Build(ctx, testGuildID, testThread, details, "current", nil, userTokens)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +134,7 @@ func TestBuild_HardCapTruncatesOldest(t *testing.T) {
 
 	userTokens := f.llm.EstimateTokens(ctx, []llm.Message{{Role: "user", Content: "current"}})
 	messages, compactionNeeded, err := NewPromptBuilder(f.llm, f.sm, f.cfg, f.ps).
-		Build(ctx, testGuildID, testThread, details, "current", userTokens)
+		Build(ctx, testGuildID, testThread, details, "current", nil, userTokens)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +163,7 @@ func TestBuild_SummaryIncludedBeforeHistory(t *testing.T) {
 	f.saveCurrent(t)
 
 	const summary = "SUMMARY_TEXT"
-	if err := f.sm.PruneAndSummarize(ctx, testGuildID, testThread, summary, 0, 10); err != nil {
+	if err := f.sm.PruneAndSummarize(ctx, testGuildID, testThread, summary, 0); err != nil {
 		t.Fatal(err)
 	}
 
@@ -138,7 +174,7 @@ func TestBuild_SummaryIncludedBeforeHistory(t *testing.T) {
 
 	userTokens := f.llm.EstimateTokens(ctx, []llm.Message{{Role: "user", Content: "current"}})
 	messages, _, err := NewPromptBuilder(f.llm, f.sm, f.cfg, f.ps).
-		Build(ctx, testGuildID, testThread, details, "current", userTokens)
+		Build(ctx, testGuildID, testThread, details, "current", nil, userTokens)
 	if err != nil {
 		t.Fatal(err)
 	}

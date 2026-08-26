@@ -90,7 +90,7 @@ func setupConversation(t *testing.T) *fixtures {
 // persists the incoming message before prompt assembly (Build's precondition).
 func (f *fixtures) saveCurrent(t *testing.T) {
 	t.Helper()
-	if err := f.sm.SaveMessage(context.Background(), testGuildID, testThread, "user", "current", 0); err != nil {
+	if err := f.sm.SaveMessage(context.Background(), testGuildID, testThread, "user", "current"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -104,7 +104,7 @@ func (f *fixtures) seed(t *testing.T, n int, format string) {
 		if format != "" {
 			msg = fmt.Sprintf(format, i)
 		}
-		if err := f.sm.SaveMessage(ctx, "guild1", "", "user", msg, 0); err != nil {
+		if err := f.sm.SaveMessage(ctx, "guild1", "", "user", msg); err != nil {
 			t.Fatal(err)
 		}
 	}

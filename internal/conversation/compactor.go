@@ -122,7 +122,7 @@ func (c *Compactor) Compact(ctx context.Context, guildID, threadID, charID, reqI
 	if summaryTokens > c.cfg.LLM.SummaryMaxTokens {
 		logger.FromContext(ctx).Warn("summary exceeds configured token cap", "summary_tokens", summaryTokens, "cap", c.cfg.LLM.SummaryMaxTokens)
 	}
-	if err := c.session.PruneAndSummarize(ctx, guildID, threadID, summary, prunedCount, summaryTokens); err != nil {
+	if err := c.session.PruneAndSummarize(ctx, guildID, threadID, summary, prunedCount); err != nil {
 		logger.FromContext(ctx).Error("error pruning history", "error", err)
 		return
 	}

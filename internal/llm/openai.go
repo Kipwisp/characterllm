@@ -8,22 +8,95 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"characterllm/internal/logger"
 )
 
+// tokensPerImage is the rough token cost of a single attached image. Images
+// are downscaled to a 512px box before sending, which lands in the low
+// hundreds of tokens for common vision models.
+const tokensPerImage = 500
+
+// llamaMessage is the OpenAI JSON form of a single turn in LlamaRequest/LlamaResponse. Its
+// content is either a plain JSON string or an array of content parts (a text
+// part plus one image_url part per attached image).
+type llamaMessage struct {
+	Role      string          `json:"role"`
+	Content   json.RawMessage `json:"content"`
+	Reasoning string          `json:"reasoning_content,omitempty"`
+}
+
+type imagePart struct {
+	URL string `json:"url"`
+}
+
+type contentPart struct {
+	Type     string         `json:"type"`
+	Text     string         `json:"text,omitempty"`
+	ImageURL *imagePart `json:"image_url,omitempty"`
+}
+
+func toLlamaMessages(messages []Message) ([]llamaMessage, error) {
+	out := make([]llamaMessage, 0, len(messages))
+	for _, m := range messages {
+		wm := llamaMessage{Role: m.Role, Reasoning: m.Reasoning}
+
+		var payload any = m.Content
+		if len(m.Images) > 0 {
+			parts := make([]contentPart, 0, len(m.Images)+1)
+			parts = append(parts, contentPart{Type: "text", Text: m.Content})
+			for _, u := range m.Images {
+				parts = append(parts, contentPart{Type: "image_url", ImageURL: &imagePart{URL: u}})
+			}
+			payload = parts
+		}
+
+		data, err := json.Marshal(payload)
+		if err != nil {
+			return nil, err
+		}
+		wm.Content = data
+		out = append(out, wm)
+	}
+	return out, nil
+}
+
+// text extracts the readable text from a llamaMessage's content, accepting
+// both the plain string form and the content-parts array (text parts
+// concatenated).
+func (w llamaMessage) text() string {
+	var s string
+	if err := json.Unmarshal(w.Content, &s); err == nil {
+		return s
+	}
+	var parts []contentPart
+	if err := json.Unmarshal(w.Content, &parts); err != nil {
+		return ""
+	}
+	var b strings.Builder
+	for _, p := range parts {
+		if p.Type == "text" {
+			b.WriteString(p.Text)
+		}
+	}
+	return b.String()
+}
+
 // LlamaRequest is the payload sent to the LLM server for a completion request.
 type LlamaRequest struct {
-	Messages []Message `json:"messages"`
-	Model    string    `json:"model"`
+	Messages []llamaMessage `json:"messages"`
+	Model    string        `json:"model"`
 }
 
 // LlamaResponse is the JSON response received from a LLM request.
 type LlamaResponse struct {
-	Choices []struct {
-		Message Message `json:"message"`
-	} `json:"choices"`
+	Choices []llamaChoice `json:"choices"`
+}
+
+type llamaChoice struct {
+	Message llamaMessage `json:"message"`
 }
 
 // OpenAIClient handles communication with an OpenAI-compatible LLM server (e.g., llama.cpp).
@@ -98,7 +171,15 @@ func (c *OpenAIClient) EstimateTokens(ctx context.Context, messages []Message) i
 			totalChars += len(msg.Reasoning)
 		}
 	}
-	return totalChars / 4
+	return totalChars/4 + tokensPerImage*countImages(messages)
+}
+
+func countImages(messages []Message) int {
+	total := 0
+	for _, msg := range messages {
+		total += len(msg.Images)
+	}
+	return total
 }
 
 func (c *OpenAIClient) verifyTokenizationSupport(ctx context.Context) bool {
@@ -114,8 +195,12 @@ func (c *OpenAIClient) fetchRemoteTokens(ctx context.Context, messages []Message
 	}
 	tokenURL := fmt.Sprintf("%s://%s/v1/tokenize", u.Scheme, u.Host)
 
+	llamaMessages, err := toLlamaMessages(messages)
+	if err != nil {
+		return 0, err
+	}
 	reqBody := LlamaRequest{
-		Messages: messages,
+		Messages: llamaMessages,
 	}
 
 	jsonData, err := json.Marshal(reqBody)
@@ -151,9 +236,13 @@ func (c *OpenAIClient) fetchRemoteTokens(ctx context.Context, messages []Message
 
 // GenerateResponse sends a prompt to the LLM and returns the full response and reasoning.
 func (c *OpenAIClient) GenerateResponse(ctx context.Context, messages []Message, model string) (string, string, error) {
+	llamaMessages, err := toLlamaMessages(messages)
+	if err != nil {
+		return "", "", err
+	}
 	reqBody := LlamaRequest{
 		Model:    model,
-		Messages: messages,
+		Messages: llamaMessages,
 	}
 
 	jsonData, err := json.Marshal(reqBody)
@@ -215,7 +304,7 @@ func (c *OpenAIClient) doGenerate(ctx context.Context, jsonData []byte, attempt,
 
 	if len(llamaResp.Choices) > 0 {
 		choice := llamaResp.Choices[0].Message
-		return choice.Content, choice.Reasoning, false, nil
+		return choice.text(), choice.Reasoning, false, nil
 	}
 
 	return "", "", true, fmt.Errorf("no response from llama.cpp (attempt %d/%d)", attempt, maxRetries)

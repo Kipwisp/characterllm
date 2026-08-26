@@ -95,9 +95,9 @@ func (c *setAvatarCmd) Execute(ctx context.Context, cmdCtx CommandContext, s Dis
 		return fmt.Errorf("avatar image exceeds %d bytes", maxAvatarBytes)
 	}
 
-	// hint so a cache miss can't resurrect an older image.
+	// clear image_url since we are using an user uploaded image now
 	if err := cmdCtx.GetSession().SetCharacterImage(ctx, i.GuildID, details.CharacterID, ""); err != nil {
-		logger.FromContext(ctx).Error("failed to clear character image hint", "error", err, "guild_id", i.GuildID, "character_id", details.CharacterID)
+		logger.FromContext(ctx).Error("failed to clear character image url", "error", err, "guild_id", i.GuildID, "character_id", details.CharacterID)
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{

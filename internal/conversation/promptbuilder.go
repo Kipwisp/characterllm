@@ -45,12 +45,13 @@ func (p *PromptBuilder) buildSystemPrompt(details *session.CharacterDetails, has
 }
 
 // Build assembles the full outgoing prompt: system prompt, rolling summary
-// (if any), the stored history, and the current user message. History is only
-// truncated when it cannot fit the model's context window; exceeding the
-// compaction target does not truncate. The boolean result is true when the prompt
-// exceeded the compaction target (or history had to be truncated), triggering
-// compaction.
-func (p *PromptBuilder) Build(ctx context.Context, guildID, threadID string, details *session.CharacterDetails, prompt string, userTokens int) ([]llm.Message, bool, error) {
+// (if any), the stored history, and the current user message. images holds
+// data URIs attached to the current user message (empty for text-only turns).
+// History is only truncated when it cannot fit the model's context window;
+// exceeding the compaction target does not truncate. The boolean result is
+// true when the prompt exceeded the compaction target (or history had to be
+// truncated), triggering compaction.
+func (p *PromptBuilder) Build(ctx context.Context, guildID, threadID string, details *session.CharacterDetails, prompt string, images []string, userTokens int) ([]llm.Message, bool, error) {
 	// Fetch the rolling summary once so the system notice and the summary message stay in sync
 	summary, err := p.session.GetSummary(ctx, guildID, threadID)
 	if err != nil {
@@ -92,7 +93,7 @@ func (p *PromptBuilder) Build(ctx context.Context, guildID, threadID string, det
 	reverseMessages(history)
 
 	messages = append(messages, history...)
-	messages = append(messages, llm.Message{Role: "user", Content: prompt})
+	messages = append(messages, llm.Message{Role: "user", Content: prompt, Images: images})
 
 	compactionNeeded := hardTruncated || promptTokens > softBudget
 	return messages, compactionNeeded, nil

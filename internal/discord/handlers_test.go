@@ -41,6 +41,7 @@ func setupHandlers(t *testing.T) (*Handlers, *mockLLMClient, *session.Manager, s
 			CompactionThreshold: 0.8,
 			RecentMemoryWindow:  10,
 			SummaryMaxTokens:    1024,
+			MaxImages:         2,
 		},
 		Images: config.ImageConfig{
 			Provider:   "searxng",
@@ -178,6 +179,277 @@ func TestHandleMessageCreate_ReplyToBot(t *testing.T) {
 
 	if sentResponse != "Hello reply!" {
 		t.Errorf("Expected 'Hello reply!', got %s", sentResponse)
+	}
+}
+
+func TestHandleMessageCreate_VisionAttachmentForwarded(t *testing.T) {
+	h, llmMock, sm, dbPath := setupHandlers(t)
+	defer os.Remove(dbPath)
+
+	ctx := context.Background()
+	guildID := "guild1"
+	charID := "char1"
+	sm.SaveCharacterCard(ctx, guildID, &session.CharacterCard{
+		CharacterID: charID,
+		DisplayName: "TestChar",
+		Description: "A test character",
+	}, []string{})
+	sm.SetActiveCharacter(ctx, guildID, charID)
+	h.BotConfig.LLM.Vision = true
+
+	called := false
+	h.imageClient = &mockImageClient{
+		ImageToDataURIFn: func(ctx context.Context, url string) (string, error) {
+			called = true
+			if url != "https://cdn.discordapp.com/att/1.png" {
+				t.Errorf("unexpected URL: %s", url)
+			}
+			return "data:image/jpeg;base64,abc", nil
+		},
+	}
+
+	var captured []llm.Message
+	llmMock.GenerateResponseFn = func(ctx context.Context, messages []llm.Message, model string) (string, string, error) {
+		captured = messages
+		return "OK", "", nil
+	}
+
+	s := &mockDiscordSession{
+		GetUserMentionFn: func() string { return "<@123>" },
+		ChannelMessageSendReplyFn: func(channelID string, content string, response *discordgo.MessageReference) (*discordgo.Message, error) {
+			return nil, nil
+		},
+	}
+
+	m := &discordgo.MessageCreate{
+		Message: &discordgo.Message{
+			Content: "<@123> what is this?",
+			Author:  &discordgo.User{Bot: false},
+			Attachments: []*discordgo.MessageAttachment{
+				{URL: "https://cdn.discordapp.com/att/1.png", ContentType: "image/png"},
+				{URL: "https://cdn.discordapp.com/att/2.pdf", ContentType: "application/pdf"},
+			},
+		},
+	}
+	m.GuildID = guildID
+
+	h.handleMessageCreate(s, m)
+
+	if !called {
+		t.Fatal("expected the image client to be called")
+	}
+	last := captured[len(captured)-1]
+	if len(last.Images) != 1 || last.Images[0] != "data:image/jpeg;base64,abc" {
+		t.Errorf("expected the attachment data URI on the current message, got %v", last.Images)
+	}
+}
+
+func TestHandleMessageCreate_ImageNotesStrippedAndPersisted(t *testing.T) {
+	h, llmMock, sm, dbPath := setupHandlers(t)
+	defer os.Remove(dbPath)
+
+	ctx := context.Background()
+	guildID := "guild1"
+	charID := "char1"
+	sm.SaveCharacterCard(ctx, guildID, &session.CharacterCard{
+		CharacterID: charID,
+		DisplayName: "TestChar",
+		Description: "A test character",
+	}, []string{})
+	sm.SetActiveCharacter(ctx, guildID, charID)
+	h.BotConfig.LLM.Vision = true
+
+	h.imageClient = &mockImageClient{
+		ImageToDataURIFn: func(ctx context.Context, url string) (string, error) {
+			return "data:image/jpeg;base64,abc", nil
+		},
+	}
+
+	llmMock.GenerateResponseFn = func(ctx context.Context, messages []llm.Message, model string) (string, string, error) {
+		return "Nice shot! <image_note>a golden retriever lying on a beach</image_note>", "", nil
+	}
+
+	var sentContent string
+	s := &mockDiscordSession{
+		GetUserMentionFn: func() string { return "<@123>" },
+		ChannelMessageSendReplyFn: func(channelID string, content string, response *discordgo.MessageReference) (*discordgo.Message, error) {
+			sentContent = content
+			return nil, nil
+		},
+	}
+
+	m := &discordgo.MessageCreate{
+		Message: &discordgo.Message{
+			Content: "<@123> what is this?",
+			Author:  &discordgo.User{Bot: false},
+			Attachments: []*discordgo.MessageAttachment{
+				{URL: "https://cdn.discordapp.com/att/1.png", ContentType: "image/png"},
+			},
+		},
+	}
+	m.GuildID = guildID
+
+	h.handleMessageCreate(s, m)
+
+	if sentContent != "Nice shot!" {
+		t.Errorf("expected image note stripped from the sent message, got %q", sentContent)
+	}
+
+	history, err := sm.GetHistory(ctx, guildID, "", 10, 0)
+	if err != nil {
+		t.Fatalf("GetHistory failed: %v", err)
+	}
+	var userRow, assistantRow string
+	for _, msg := range history {
+		switch msg.Role {
+		case "user":
+			userRow = msg.Content
+		case "assistant":
+			assistantRow = msg.Content
+		}
+	}
+	if assistantRow != "Nice shot!" {
+		t.Errorf("expected assistant row without the note, got %q", assistantRow)
+	}
+	if !strings.Contains(userRow, "[Image: a golden retriever lying on a beach]") {
+		t.Errorf("expected the image note attached to the user row, got %q", userRow)
+	}
+}
+
+func TestHandleMessageCreate_MaxImagesCapsForwardedAttachments(t *testing.T) {
+	h, llmMock, sm, dbPath := setupHandlers(t)
+	defer os.Remove(dbPath)
+
+	ctx := context.Background()
+	guildID := "guild1"
+	charID := "char1"
+	sm.SaveCharacterCard(ctx, guildID, &session.CharacterCard{
+		CharacterID: charID,
+		DisplayName: "TestChar",
+		Description: "A test character",
+	}, []string{})
+	sm.SetActiveCharacter(ctx, guildID, charID)
+	h.BotConfig.LLM.Vision = true
+
+	var fetched []string
+	h.imageClient = &mockImageClient{
+		ImageToDataURIFn: func(ctx context.Context, url string) (string, error) {
+			fetched = append(fetched, url)
+			return "data:image/jpeg;base64,abc", nil
+		},
+	}
+	llmMock.GenerateResponseFn = func(ctx context.Context, messages []llm.Message, model string) (string, string, error) {
+		return "OK", "", nil
+	}
+	s := &mockDiscordSession{
+		GetUserMentionFn: func() string { return "<@123>" },
+		ChannelMessageSendReplyFn: func(channelID string, content string, response *discordgo.MessageReference) (*discordgo.Message, error) {
+			return nil, nil
+		},
+	}
+
+	t.Run("cap 2 of 3 attachments", func(t *testing.T) {
+		h.BotConfig.LLM.MaxImages = 2
+		fetched = nil
+
+		m := &discordgo.MessageCreate{
+			Message: &discordgo.Message{
+				Content: "<@123> pics",
+				Author:  &discordgo.User{Bot: false},
+				Attachments: []*discordgo.MessageAttachment{
+					{URL: "https://cdn.discordapp.com/att/1.png", ContentType: "image/png"},
+					{URL: "https://cdn.discordapp.com/att/2.png", ContentType: "image/png"},
+					{URL: "https://cdn.discordapp.com/att/3.png", ContentType: "image/png"},
+				},
+			},
+		}
+		m.GuildID = guildID
+
+		h.handleMessageCreate(s, m)
+
+		if len(fetched) != 2 || fetched[0] != "https://cdn.discordapp.com/att/1.png" || fetched[1] != "https://cdn.discordapp.com/att/2.png" {
+			t.Errorf("expected the first two attachments forwarded, got %v", fetched)
+		}
+	})
+
+	t.Run("cap 0 forwards nothing", func(t *testing.T) {
+		h.BotConfig.LLM.MaxImages = 0
+		fetched = nil
+
+		m := &discordgo.MessageCreate{
+			Message: &discordgo.Message{
+				Content: "<@123> pics",
+				Author:  &discordgo.User{Bot: false},
+				Attachments: []*discordgo.MessageAttachment{
+					{URL: "https://cdn.discordapp.com/att/1.png", ContentType: "image/png"},
+				},
+			},
+		}
+		m.GuildID = guildID
+
+		h.handleMessageCreate(s, m)
+
+		if len(fetched) != 0 {
+			t.Errorf("expected no attachments forwarded, got %v", fetched)
+		}
+	})
+}
+
+func TestHandleMessageCreate_VisionDisabledIgnoresAttachments(t *testing.T) {
+	h, llmMock, sm, dbPath := setupHandlers(t)
+	defer os.Remove(dbPath)
+
+	ctx := context.Background()
+	guildID := "guild1"
+	charID := "char1"
+	sm.SaveCharacterCard(ctx, guildID, &session.CharacterCard{
+		CharacterID: charID,
+		DisplayName: "TestChar",
+		Description: "A test character",
+	}, []string{})
+	sm.SetActiveCharacter(ctx, guildID, charID)
+	// Vision stays false (the setupHandlers default).
+
+	called := false
+	h.imageClient = &mockImageClient{
+		ImageToDataURIFn: func(ctx context.Context, url string) (string, error) {
+			called = true
+			return "data:image/jpeg;base64,abc", nil
+		},
+	}
+
+	var captured []llm.Message
+	llmMock.GenerateResponseFn = func(ctx context.Context, messages []llm.Message, model string) (string, string, error) {
+		captured = messages
+		return "OK", "", nil
+	}
+
+	s := &mockDiscordSession{
+		GetUserMentionFn: func() string { return "<@123>" },
+		ChannelMessageSendReplyFn: func(channelID string, content string, response *discordgo.MessageReference) (*discordgo.Message, error) {
+			return nil, nil
+		},
+	}
+
+	m := &discordgo.MessageCreate{
+		Message: &discordgo.Message{
+			Content: "<@123> what is this?",
+			Author:  &discordgo.User{Bot: false},
+			Attachments: []*discordgo.MessageAttachment{
+				{URL: "https://cdn.discordapp.com/att/1.png", ContentType: "image/png"},
+			},
+		},
+	}
+	m.GuildID = guildID
+
+	h.handleMessageCreate(s, m)
+
+	if called {
+		t.Error("image client must not be called when vision is disabled")
+	}
+	last := captured[len(captured)-1]
+	if len(last.Images) != 0 {
+		t.Errorf("expected no images forwarded, got %v", last.Images)
 	}
 }
 
@@ -438,7 +710,7 @@ func TestCompaction_TriggeredThroughHandler(t *testing.T) {
 	}
 
 	for i := 0; i < 10; i++ {
-		sm.SaveMessage(ctx, guildID, "", "user", "Msg", 0)
+		sm.SaveMessage(ctx, guildID, "", "user", "Msg")
 	}
 
 	compactionCalls := 0

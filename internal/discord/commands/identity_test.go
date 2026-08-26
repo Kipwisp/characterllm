@@ -6,6 +6,7 @@ import (
 	"os"
 	"testing"
 
+	"characterllm/internal/responses"
 	"characterllm/internal/session"
 
 	"github.com/bwmarrin/discordgo"
@@ -69,6 +70,28 @@ func TestSyncGuildIdentity(t *testing.T) {
 		}
 		if !calls.avatarSet || calls.avatar != "data:image/png;base64,abc" {
 			t.Errorf("expected avatar sync, got %+v", calls)
+		}
+	})
+
+	t.Run("long display name truncated to limit", func(t *testing.T) {
+		cmdCtx, s, _, calls := setup(t)
+		longName := "This Character Name Deliberately Exceeds The Limit"
+		cmdCtx.Session.SaveCharacterCard(context.Background(), guildID, &session.CharacterCard{
+			CharacterID: charID,
+			DisplayName: longName,
+		}, nil)
+
+		if err := SyncGuildIdentity(context.Background(), cmdCtx, s, guildID); err != nil {
+			t.Fatalf("SyncGuildIdentity failed: %v", err)
+		}
+		if !calls.nickSet {
+			t.Fatal("expected nickname sync")
+		}
+		if len([]rune(calls.nickname)) != discordNickLimit {
+			t.Errorf("expected nickname truncated to %d runes, got %d: %q", discordNickLimit, len([]rune(calls.nickname)), calls.nickname)
+		}
+		if calls.nickname != string([]rune(longName)[:discordNickLimit]) {
+			t.Errorf("expected prefix truncation, got %q", calls.nickname)
 		}
 	})
 
@@ -180,7 +203,7 @@ func TestSetAvatarCmd(t *testing.T) {
 		if err := cmd.Execute(context.Background(), cmdCtx, s, newInteraction(nil, nil)); err == nil {
 			t.Error("expected error without active character")
 		}
-		if content != "No active character in this server. Use /setcharacter first." {
+		if content != responses.SetAvatar.NoCharacter {
 			t.Errorf("unexpected response: %s", content)
 		}
 	})
@@ -202,7 +225,7 @@ func TestSetAvatarCmd(t *testing.T) {
 		if err := cmd.Execute(context.Background(), cmdCtx, s, newInteraction(nil, nil)); err == nil {
 			t.Error("expected error without source")
 		}
-		if content != "Provide an image via the image option or an attachment." {
+		if content != responses.SetAvatar.MissingSource {
 			t.Errorf("unexpected response: %s", content)
 		}
 	})
@@ -263,7 +286,7 @@ func TestSetAvatarCmd(t *testing.T) {
 		if avatarDataURI != "data:image/png;base64,abc" {
 			t.Errorf("expected avatar update, got %q", avatarDataURI)
 		}
-		if content != "Avatar updated successfully!" {
+		if content != responses.SetAvatar.Success {
 			t.Errorf("unexpected response: %s", content)
 		}
 	})
@@ -343,7 +366,7 @@ func TestSetAvatarCmd(t *testing.T) {
 		if err := cmd.Execute(context.Background(), cmdCtx, s, newInteraction(attachments, nil)); err == nil {
 			t.Error("expected error for oversized image")
 		}
-		if content != "That image is too large to use as a Discord avatar." {
+		if content != responses.SetAvatar.TooLarge {
 			t.Errorf("unexpected response: %s", content)
 		}
 

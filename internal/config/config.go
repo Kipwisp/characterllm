@@ -33,6 +33,12 @@ type LLMConfig struct {
 	RecentMemoryWindow  int
 	SummaryMaxTokens    int
 	TimeoutSeconds      int
+	// Vision indicates the model accepts image content parts. When false,
+	// image attachments on user messages are ignored.
+	Vision bool
+	// MaxImages bounds how many image attachments per message are forwarded
+	// to the model.
+	MaxImages int
 }
 
 type PromptConfig struct {
@@ -75,6 +81,8 @@ func LoadConfig() *Config {
 			RecentMemoryWindow:  getEnvInt("LLM_RECENT_MEMORY_WINDOW", 15),
 			SummaryMaxTokens:    getEnvInt("LLM_SUMMARY_MAX_TOKENS", 1024),
 			TimeoutSeconds:      getEnvInt("LLM_TIMEOUT_SECONDS", 120),
+			Vision:              getEnvBool("LLM_VISION", false),
+			MaxImages:           getEnvInt("LLM_MAX_IMAGES", 2),
 		},
 		Prompts: PromptConfig{
 			SystemPath:     getEnv("SYSTEM_PROMPT_PATH", "prompts/system_prompt.md"),
@@ -125,4 +133,16 @@ func getEnvFloat(key string, fallback float64) float64 {
 		return fallback
 	}
 	return f
+}
+
+func getEnvBool(key string, fallback bool) bool {
+	val := getEnv(key, "")
+	if val == "" {
+		return fallback
+	}
+	b, err := strconv.ParseBool(val)
+	if err != nil {
+		return fallback
+	}
+	return b
 }

@@ -7,6 +7,19 @@ import (
 	"characterllm/internal/logger"
 )
 
+// discordNickLimit is the maximum length of a guild nickname.
+const discordNickLimit = 32
+
+// truncateToRuneLimit shortens s to at most limit runes so it never trips
+// Discord's length validation on display names.
+func truncateToRuneLimit(s string, limit int) string {
+	runes := []rune(s)
+	if len(runes) <= limit {
+		return s
+	}
+	return string(runes[:limit])
+}
+
 // SyncGuildIdentity aligns the bot's visible identity in a guild (nickname and
 // avatar) with the active character.
 func SyncGuildIdentity(ctx context.Context, cmdCtx CommandContext, s DiscordSession, guildID string) error {
@@ -15,7 +28,7 @@ func SyncGuildIdentity(ctx context.Context, cmdCtx CommandContext, s DiscordSess
 		return nil
 	}
 
-	if err := s.GuildMemberNickname(guildID, "@me", details.DisplayName); err != nil {
+	if err := s.GuildMemberNickname(guildID, "@me", truncateToRuneLimit(details.DisplayName, discordNickLimit)); err != nil {
 		return fmt.Errorf("failed to sync nickname: %w", err)
 	}
 

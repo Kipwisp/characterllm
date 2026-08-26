@@ -1,7 +1,12 @@
 package images
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
+	"image"
+	"image/color"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -110,6 +115,78 @@ func TestClientSaveImage(t *testing.T) {
 			t.Errorf("expected magic-byte rejection, got %v", err)
 		}
 	})
+}
+
+func TestClientImageToDataURI(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "image_duri_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	client := &Client{Cache: NewImageCache(tmpDir), Fetcher: safehttp.NewFetcher()}
+	client.Fetcher.Validate = func(ctx context.Context, raw string) (string, string, error) {
+		return raw, "localhost", nil
+	}
+	ctx := context.Background()
+
+	t.Run("Returns Processed Data URI", func(t *testing.T) {
+		src := image.NewRGBA(image.Rect(0, 0, 800, 600))
+		for y := 0; y < 600; y++ {
+			for x := 0; x < 800; x++ {
+				src.Set(x, y, color.RGBA{uint8(x * 255 / 799), uint8(y * 255 / 599), 128, 255})
+			}
+		}
+		var buf bytes.Buffer
+		if err := png.Encode(&buf, src); err != nil {
+			t.Fatal(err)
+		}
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "image/png")
+			w.Write(buf.Bytes())
+		}))
+		t.Cleanup(server.Close)
+
+		duri, err := client.ImageToDataURI(ctx, server.URL)
+		if err != nil {
+			t.Fatalf("ImageToDataURI failed: %v", err)
+		}
+		if !strings.HasPrefix(duri, "data:image/jpeg;base64,") {
+			t.Errorf("expected jpeg data URI for opaque image, got prefix %q", duri[:20])
+		}
+
+		// The payload must decode to the downscaled dimensions.
+		payload := duri[strings.Index(duri, ",")+1:]
+		cfg, err := decodeBase64Image(t, payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Width != maxImageEdge || cfg.Height != 384 {
+			t.Errorf("expected %dx384, got %dx%d", maxImageEdge, cfg.Width, cfg.Height)
+		}
+	})
+
+	t.Run("Non-Image Rejected", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte("not an image"))
+		}))
+		t.Cleanup(server.Close)
+
+		if _, err := client.ImageToDataURI(ctx, server.URL); err == nil || !strings.Contains(err.Error(), "recognized image") {
+			t.Errorf("expected magic-byte rejection, got %v", err)
+		}
+	})
+}
+
+func decodeBase64Image(t *testing.T, b64 string) (image.Config, error) {
+	t.Helper()
+	data, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		return image.Config{}, err
+	}
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	return cfg, err
 }
 
 func TestClientImageToBase64(t *testing.T) {

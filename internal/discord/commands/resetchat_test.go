@@ -19,7 +19,7 @@ func TestResetChatCmd_Execute(t *testing.T) {
 	i.GuildID = guildID
 
 	// Seed some history
-	cmdCtx.Session.SaveMessage(context.Background(), guildID, "", "user", "Hello", 0)
+	cmdCtx.Session.SaveMessage(context.Background(), guildID, "", "user", "Hello")
 
 	respondCalled := false
 	s.InteractionRespondFn = func(interaction *discordgo.Interaction, response *discordgo.InteractionResponse) error {

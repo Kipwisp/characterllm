@@ -8,8 +8,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"characterllm/internal/search"
 	"characterllm/internal/safehttp"
+	"characterllm/internal/search"
 )
 
 // ImageClient defines the interface for searching and caching character images.
@@ -18,6 +18,9 @@ type ImageClient interface {
 	SaveImage(ctx context.Context, guildID, characterID, url string) (string, error)
 	GetImage(guildID, characterID string) (string, error)
 	ImageToBase64(ctx context.Context, path string) (string, error)
+	// ImageToDataURI downloads the image at url, processes it, and returns it
+	// as a data URI suitable for a vision model. Nothing is written to disk.
+	ImageToDataURI(ctx context.Context, url string) (string, error)
 	GetCache() *ImageCache
 }
 
@@ -45,33 +48,52 @@ func (c *Client) SearchImages(ctx context.Context, query string, limit int) ([]s
 
 // SaveImage downloads an image from the given URL (via the safehttp policy),
 // downscales and re-encodes it, stores it in the local cache under the
-// guild/character key, and returns the local path. The content must carry a
-// recognized image signature.
+// guild/character key, and returns the local path.
 func (c *Client) SaveImage(ctx context.Context, guildID, characterID, url string) (string, error) {
-	resp, err := c.Fetcher.Get(ctx, url)
+	data, ext, err := c.fetchImage(ctx, url)
 	if err != nil {
 		return "", err
+	}
+	return c.Cache.Save(guildID, characterID, ext, data)
+}
+
+// ImageToDataURI downloads the image at url (via the safehttp policy),
+// processes it, and returns it as a base64 data URI.
+func (c *Client) ImageToDataURI(ctx context.Context, url string) (string, error) {
+	data, ext, err := c.fetchImage(ctx, url)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("data:%s;base64,%s", mimeForExt(ext), base64.StdEncoding.EncodeToString(data)), nil
+}
+
+// fetchImage downloads an image under the safehttp policy, enforces the size
+// cap, verifies the magic bytes, and processes the content. It returns the
+// processed bytes and the resulting file extension.
+func (c *Client) fetchImage(ctx context.Context, url string) ([]byte, string, error) {
+	resp, err := c.Fetcher.Get(ctx, url)
+	if err != nil {
+		return nil, "", err
 	}
 	defer resp.Body.Close()
 
 	if resp.ContentLength > maxDownloadBytes {
-		return "", fmt.Errorf("image exceeds maximum size of %d bytes", maxDownloadBytes)
+		return nil, "", fmt.Errorf("image exceeds maximum size of %d bytes", maxDownloadBytes)
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxDownloadBytes+1))
 	if err != nil {
-		return "", err
+		return nil, "", err
 	}
 	if int64(len(data)) > maxDownloadBytes {
-		return "", fmt.Errorf("image exceeds maximum size of %d bytes", maxDownloadBytes)
+		return nil, "", fmt.Errorf("image exceeds maximum size of %d bytes", maxDownloadBytes)
 	}
 
 	ext, ok := sniffImageType(data)
 	if !ok {
-		return "", fmt.Errorf("downloaded content is not a recognized image")
+		return nil, "", fmt.Errorf("downloaded content is not a recognized image")
 	}
-	data, ext = processImage(data, ext)
-
-	return c.Cache.Save(guildID, characterID, ext, data)
+	processed, pext := processImage(data, ext)
+	return processed, pext, nil
 }
 
 // GetImage returns the local path of the cached image for a guild and character.
@@ -86,20 +108,20 @@ func (c *Client) ImageToBase64(ctx context.Context, path string) (string, error)
 	if err != nil {
 		return "", err
 	}
+	return fmt.Sprintf("data:%s;base64,%s", mimeForExt(filepath.Ext(path)), base64.StdEncoding.EncodeToString(data)), nil
+}
 
-	ext := filepath.Ext(path)
-	contentType := "image/png"
+// mimeForExt maps an image file extension to its MIME type, defaulting to PNG.
+func mimeForExt(ext string) string {
 	switch ext {
 	case ".jpg", ".jpeg":
-		contentType = "image/jpeg"
+		return "image/jpeg"
 	case ".gif":
-		contentType = "image/gif"
+		return "image/gif"
 	case ".webp":
-		contentType = "image/webp"
+		return "image/webp"
 	}
-
-	encoded := base64.StdEncoding.EncodeToString(data)
-	return fmt.Sprintf("data:%s;base64,%s", contentType, encoded), nil
+	return "image/png"
 }
 
 // NewImageClient is a factory that returns the configured image client.

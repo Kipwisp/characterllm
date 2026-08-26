@@ -190,9 +190,7 @@ func TestGenerateResponse(t *testing.T) {
 			handler: func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
 				json.NewEncoder(w).Encode(LlamaResponse{
-					Choices: []struct {
-						Message Message `json:"message"`
-					}{{Message: Message{Content: "Hello!", Reasoning: "I am greeting the user."}}},
+					Choices: []llamaChoice{{Message: llamaMessage{Role: "assistant", Content: json.RawMessage(`"Hello!"`), Reasoning: "I am greeting the user."}}},
 				})
 			},
 			messages:       []Message{{Role: "user", Content: "Hi"}},
@@ -257,9 +255,7 @@ func TestGenerateResponse_Retry(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(LlamaResponse{
-			Choices: []struct {
-				Message Message `json:"message"`
-			}{{Message: Message{Content: "Retry Success", Reasoning: "Worked after retry"}}},
+			Choices: []llamaChoice{{Message: llamaMessage{Role: "assistant", Content: json.RawMessage(`"Retry Success"`), Reasoning: "Worked after retry"}}},
 		})
 	}))
 	defer server.Close()
@@ -278,5 +274,68 @@ func TestGenerateResponse_Retry(t *testing.T) {
 	}
 	if attempts != 2 {
 		t.Errorf("expected 2 attempts, got %d", attempts)
+	}
+}
+
+func TestToLlamaMessages_Plain(t *testing.T) {
+	msgs, err := toLlamaMessages([]Message{{Role: "user", Content: "hi"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(msgs[0].Content); got != `"hi"` {
+		t.Errorf("expected plain string content, got %s", got)
+	}
+	if msgs[0].Role != "user" {
+		t.Errorf("unexpected role: %q", msgs[0].Role)
+	}
+}
+
+func TestToLlamaMessages_WithImages(t *testing.T) {
+	msgs, err := toLlamaMessages([]Message{
+		{Role: "user", Content: "look at this", Images: []string{"data:image/jpeg;base64,abc"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var parts []struct {
+		Type     string `json:"type"`
+		Text     string `json:"text"`
+		ImageURL struct {
+			URL string `json:"url"`
+		} `json:"image_url"`
+	}
+	if err := json.Unmarshal(msgs[0].Content, &parts); err != nil {
+		t.Fatal(err)
+	}
+	if msgs[0].Role != "user" || len(parts) != 2 {
+		t.Fatalf("unexpected structure: role=%q parts=%+v", msgs[0].Role, parts)
+	}
+	if parts[0].Type != "text" || parts[0].Text != "look at this" {
+		t.Errorf("unexpected text part: %+v", parts[0])
+	}
+	if parts[1].Type != "image_url" || parts[1].ImageURL.URL != "data:image/jpeg;base64,abc" {
+		t.Errorf("unexpected image part: %+v", parts[1])
+	}
+}
+
+func TestLlamaMessageText_StringContent(t *testing.T) {
+	var w llamaMessage
+	if err := json.Unmarshal([]byte(`{"role":"assistant","content":"hello"}`), &w); err != nil {
+		t.Fatal(err)
+	}
+	if w.Role != "assistant" || w.text() != "hello" {
+		t.Errorf("unexpected message: role=%q text=%q", w.Role, w.text())
+	}
+}
+
+func TestLlamaMessageText_PartsContent(t *testing.T) {
+	var w llamaMessage
+	raw := `{"role":"user","content":[{"type":"text","text":"part one "},{"type":"image_url","image_url":{"url":"x"}},{"type":"text","text":"part two"}]}`
+	if err := json.Unmarshal([]byte(raw), &w); err != nil {
+		t.Fatal(err)
+	}
+	if w.text() != "part one part two" {
+		t.Errorf("expected text parts concatenated, got %q", w.text())
 	}
 }

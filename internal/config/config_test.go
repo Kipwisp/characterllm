@@ -10,7 +10,7 @@ func TestLoadConfig(t *testing.T) {
 	originalEnv := make(map[string]string)
 	envVars := []string{
 		"DISCORD_TOKEN", "CLIENT_ID", "MAIN_GUILD", "MAIN_CHANNEL",
-		"LLM_URL", "LLM_MODEL", "LLM_MAX_RETRIES", "LLM_MAX_CONTEXT", "LLM_COMPACTION_THRESHOLD", "LLM_RECENT_MEMORY_WINDOW",
+		"LLM_URL", "LLM_MODEL", "LLM_MAX_RETRIES", "LLM_MAX_CONTEXT", "LLM_COMPACTION_THRESHOLD", "LLM_RECENT_MEMORY_WINDOW", "LLM_VISION", "LLM_MAX_IMAGES",
 		"SYSTEM_PROMPT_PATH", "COMPACTION_PROMPT_PATH", "SYNTHESIS_PROMPT_PATH", "ANALYZER_PROMPT_PATH",
 		"IMAGE_PROVIDER", "SEARXNG_URL", "MAX_SEARCH_RESULTS", "IMAGE_CACHE_DIR",
 		"LOG_LEVEL", "TOPIC_RATE", "BIRTHDAY_HOUR",
@@ -42,6 +42,8 @@ func TestLoadConfig(t *testing.T) {
 	os.Setenv("LLM_MAX_CONTEXT", "8192")
 	os.Setenv("LLM_COMPACTION_THRESHOLD", "0.5")
 	os.Setenv("LLM_RECENT_MEMORY_WINDOW", "20")
+	os.Setenv("LLM_VISION", "true")
+	os.Setenv("LLM_MAX_IMAGES", "4")
 	os.Setenv("SYSTEM_PROMPT_PATH", "test/sys.md")
 	os.Setenv("COMPACTION_PROMPT_PATH", "test/comp.md")
 	os.Setenv("SYNTHESIS_PROMPT_PATH", "test/synth.md")
@@ -73,6 +75,12 @@ func TestLoadConfig(t *testing.T) {
 	}
 	if cfg.LLM.Model != "test-model" {
 		t.Errorf("Expected LLM_MODEL test-model, got %s", cfg.LLM.Model)
+	}
+	if !cfg.LLM.Vision {
+		t.Error("Expected LLM_VISION true")
+	}
+	if cfg.LLM.MaxImages != 4 {
+		t.Errorf("Expected LLM_MAX_IMAGES 4, got %d", cfg.LLM.MaxImages)
 	}
 	if cfg.LLM.MaxRetries != 5 {
 		t.Errorf("Expected LLM_MAX_RETRIES 5, got %d", cfg.LLM.MaxRetries)
@@ -125,7 +133,7 @@ func TestLoadConfigDefaults(t *testing.T) {
 	// Clear environment variables to test defaults
 	envVars := []string{
 		"DISCORD_TOKEN", "CLIENT_ID", "MAIN_GUILD", "MAIN_CHANNEL",
-		"LLM_URL", "LLM_MODEL", "LLM_MAX_RETRIES", "LLM_MAX_CONTEXT", "LLM_COMPACTION_THRESHOLD", "LLM_RECENT_MEMORY_WINDOW",
+		"LLM_URL", "LLM_MODEL", "LLM_MAX_RETRIES", "LLM_MAX_CONTEXT", "LLM_COMPACTION_THRESHOLD", "LLM_RECENT_MEMORY_WINDOW", "LLM_VISION", "LLM_MAX_IMAGES",
 		"SYSTEM_PROMPT_PATH", "COMPACTION_PROMPT_PATH", "SYNTHESIS_PROMPT_PATH", "ANALYZER_PROMPT_PATH",
 		"IMAGE_PROVIDER", "SEARXNG_URL", "MAX_SEARCH_RESULTS", "IMAGE_CACHE_DIR",
 		"LOG_LEVEL", "TOPIC_RATE", "BIRTHDAY_HOUR",
@@ -164,6 +172,12 @@ func TestLoadConfigDefaults(t *testing.T) {
 	}
 	if cfg.LLM.RecentMemoryWindow != 15 {
 		t.Errorf("Expected default LLM_RECENT_MEMORY_WINDOW 15, got %d", cfg.LLM.RecentMemoryWindow)
+	}
+	if cfg.LLM.Vision {
+		t.Error("Expected default LLM_VISION false")
+	}
+	if cfg.LLM.MaxImages != 2 {
+		t.Errorf("Expected default LLM_MAX_IMAGES 2, got %d", cfg.LLM.MaxImages)
 	}
 	if cfg.Prompts.SystemPath != "prompts/system_prompt.md" {
 		t.Errorf("Expected default SYSTEM_PROMPT_PATH, got %s", cfg.Prompts.SystemPath)

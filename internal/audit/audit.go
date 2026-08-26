@@ -45,7 +45,11 @@ func (a *AuditLogger) LogConversation(ctx context.Context, guildID string, charI
 
 	buf.WriteString("HISTORY:\n")
 	for _, msg := range history {
-		fmt.Fprintf(&buf, "  [%s] %s\n", msg.Role, msg.Content)
+		if len(msg.Images) > 0 {
+			fmt.Fprintf(&buf, "  [%s] %s [+%d image(s)]\n", msg.Role, msg.Content, len(msg.Images))
+		} else {
+			fmt.Fprintf(&buf, "  [%s] %s\n", msg.Role, msg.Content)
+		}
 	}
 
 	fmt.Fprintf(&buf, "\nPROMPT: %s\n", prompt)

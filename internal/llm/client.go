@@ -7,10 +7,14 @@ import (
 )
 
 // Message represents a single turn in a conversation.
+//
+// Images holds data URIs of images attached to the turn, sent to the model
+// alongside the text content.
 type Message struct {
-	Role      string `json:"role"`
-	Content   string `json:"content"`
-	Reasoning string `json:"reasoning_content,omitempty"`
+	Role      string
+	Content   string
+	Images    []string
+	Reasoning string
 }
 
 // LLMClient defines the interface for interacting with an LLM server.

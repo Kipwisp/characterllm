@@ -113,7 +113,7 @@ func TestChatHistoryOperations(t *testing.T) {
 		}
 
 		for _, msg := range msgs {
-			err := m.SaveMessage(ctx, guildID, threadID, msg.role, msg.content, 0)
+			err := m.SaveMessage(ctx, guildID, threadID, msg.role, msg.content)
 			if err != nil {
 				t.Fatalf("SaveMessage failed: %v", err)
 			}
@@ -248,22 +248,21 @@ func TestPruneAndSummarize(t *testing.T) {
 	msgs := []struct {
 		role    string
 		content string
-		tokens  int
 	}{
-		{"user", "one", 10},
-		{"assistant", "two", 20},
-		{"user", "three", 30},
-		{"assistant", "four", 40},
-		{"user", "five", 50},
+		{"user", "one"},
+		{"assistant", "two"},
+		{"user", "three"},
+		{"assistant", "four"},
+		{"user", "five"},
 	}
 	for _, msg := range msgs {
-		if err := m.SaveMessage(ctx, guildID, threadID, msg.role, msg.content, msg.tokens); err != nil {
+		if err := m.SaveMessage(ctx, guildID, threadID, msg.role, msg.content); err != nil {
 			t.Fatalf("SaveMessage failed: %v", err)
 		}
 	}
 
 	t.Run("Prune Boundary", func(t *testing.T) {
-		if err := m.PruneAndSummarize(ctx, guildID, threadID, "summary of one and two", 2, 15); err != nil {
+		if err := m.PruneAndSummarize(ctx, guildID, threadID, "summary of one and two", 2); err != nil {
 			t.Fatalf("PruneAndSummarize failed: %v", err)
 		}
 
@@ -297,19 +296,8 @@ func TestPruneAndSummarize(t *testing.T) {
 		}
 	})
 
-	t.Run("Stats Arithmetic", func(t *testing.T) {
-		total, err := m.GetTotalTokens(ctx, guildID, threadID)
-		if err != nil {
-			t.Fatalf("GetTotalTokens failed: %v", err)
-		}
-		// 150 saved - 30 pruned + 15 summary
-		if total != 135 {
-			t.Errorf("Expected 135 total tokens, got %d", total)
-		}
-	})
-
 	t.Run("Summary Upsert", func(t *testing.T) {
-		if err := m.PruneAndSummarize(ctx, guildID, threadID, "rolled summary", 2, 25); err != nil {
+		if err := m.PruneAndSummarize(ctx, guildID, threadID, "rolled summary", 2); err != nil {
 			t.Fatalf("second PruneAndSummarize failed: %v", err)
 		}
 
@@ -328,15 +316,6 @@ func TestPruneAndSummarize(t *testing.T) {
 		if len(history) != 1 || history[0].Content != "five" {
 			t.Errorf("Expected only 'five' remaining, got %v", history)
 		}
-
-		total, err := m.GetTotalTokens(ctx, guildID, threadID)
-		if err != nil {
-			t.Fatalf("GetTotalTokens failed: %v", err)
-		}
-		// 135 - 70 pruned + 25 summary
-		if total != 90 {
-			t.Errorf("Expected 90 total tokens, got %d", total)
-		}
 	})
 
 	t.Run("Clear Removes Summary", func(t *testing.T) {
@@ -349,13 +328,6 @@ func TestPruneAndSummarize(t *testing.T) {
 		}
 		if summary != "" {
 			t.Errorf("Expected empty summary after clear, got %s", summary)
-		}
-		total, err := m.GetTotalTokens(ctx, guildID, threadID)
-		if err != nil {
-			t.Fatalf("GetTotalTokens failed: %v", err)
-		}
-		if total != 0 {
-			t.Errorf("Expected 0 total tokens after clear, got %d", total)
 		}
 	})
 }
@@ -394,14 +366,14 @@ func TestPruneAndSummarize_ZeroDeletionsPreservesHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for i, content := range []string{"one", "two", "three"} {
-		if err := m.SaveMessage(ctx, guildID, "", "user", content, 10*i+1); err != nil {
+	for _, content := range []string{"one", "two", "three"} {
+		if err := m.SaveMessage(ctx, guildID, "", "user", content); err != nil {
 			t.Fatalf("SaveMessage failed: %v", err)
 		}
 	}
 
 	// A summary-only upsert (no pruning) must not delete any history.
-	if err := m.PruneAndSummarize(ctx, guildID, "", "summary only", 0, 15); err != nil {
+	if err := m.PruneAndSummarize(ctx, guildID, "", "summary only", 0); err != nil {
 		t.Fatalf("PruneAndSummarize failed: %v", err)
 	}
 
@@ -476,3 +448,45 @@ func TestCharacterDetailsIncludesImageURL(t *testing.T) {
 	}
 }
 
+
+func TestAppendToLastUserMessage(t *testing.T) {
+	m, tmpFile := setupManager(t)
+	defer os.Remove(tmpFile)
+	defer m.Close()
+	ctx := context.Background()
+
+	guildID := "guild1"
+	charID := "char1"
+	m.SaveCharacterCard(ctx, guildID, &CharacterCard{CharacterID: charID, DisplayName: "Test"}, nil)
+	m.SetActiveCharacter(ctx, guildID, charID)
+
+	t.Run("appends to most recent user message only", func(t *testing.T) {
+		m.SaveMessage(ctx, guildID, "", "user", "first")
+		m.SaveMessage(ctx, guildID, "", "assistant", "reply")
+		m.SaveMessage(ctx, guildID, "", "user", "second")
+
+		if err := m.AppendToLastUserMessage(ctx, guildID, "", "\n[Image: a dog]"); err != nil {
+			t.Fatalf("AppendToLastUserMessage failed: %v", err)
+		}
+
+		history, err := m.GetHistory(ctx, guildID, "", 10, 0)
+		if err != nil {
+			t.Fatalf("GetHistory failed: %v", err)
+		}
+		want := []string{"first", "reply", "second\n[Image: a dog]"}
+		if len(history) != len(want) {
+			t.Fatalf("expected %d rows, got %d", len(want), len(history))
+		}
+		for i, w := range want {
+			if history[i].Content != w {
+				t.Errorf("row %d: expected %q, got %q", i, w, history[i].Content)
+			}
+		}
+	})
+
+	t.Run("errors when no user message exists", func(t *testing.T) {
+		if err := m.AppendToLastUserMessage(ctx, "empty-guild", "", "\n[Image: x]"); err == nil {
+			t.Error("expected an error when no user message exists")
+		}
+	})
+}

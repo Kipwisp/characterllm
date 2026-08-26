@@ -3,6 +3,7 @@ package discord
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -128,15 +129,23 @@ func (h *Handlers) handleMessageCreate(s commands.DiscordSession, m *discordgo.M
 		return
 	}
 
+	// Images are ephemeral: they ride along in this turn's prompt only and are
+	// never persisted to history.
+	var imageDataURIs []string
+	if h.BotConfig.LLM.Vision {
+		imageDataURIs = h.collectImageAttachments(ctx, m)
+	}
+
 	// Persist the incoming message before assembling the prompt
-	userTokens := h.LLM.EstimateTokens(ctx, []llm.Message{{Role: "user", Content: prompt}})
-	if err := h.Session.SaveMessage(ctx, m.GuildID, "", "user", prompt, userTokens); err != nil {
+	userMsg := llm.Message{Role: "user", Content: prompt, Images: imageDataURIs}
+	userTokens := h.LLM.EstimateTokens(ctx, []llm.Message{userMsg})
+	if err := h.Session.SaveMessage(ctx, m.GuildID, "", "user", prompt); err != nil {
 		logger.FromContext(ctx).Error("error saving user message", "error", err)
 	}
 
 	// compactionNeeded is true when the prompt exceeded the compaction target,
 	// which triggers compaction after the reply.
-	messages, compactionNeeded, err := h.builder.Build(ctx, m.GuildID, "", details, prompt, userTokens)
+	messages, compactionNeeded, err := h.builder.Build(ctx, m.GuildID, "", details, prompt, imageDataURIs, userTokens)
 	if err != nil {
 		logger.FromContext(ctx).Error("error assembling prompt", "error", err)
 		s.ChannelMessageSendReply(m.ChannelID, "Sorry, I had trouble remembering our conversation.", &discordgo.MessageReference{
@@ -154,6 +163,45 @@ func (h *Handlers) handleMessageCreate(s commands.DiscordSession, m *discordgo.M
 	if compactionNeeded {
 		h.compactor.Compact(ctx, m.GuildID, "", details.CharacterID, reqID)
 	}
+}
+
+var imageNoteRe = regexp.MustCompile(`(?s)<image_note>.*?</image_note>`)
+
+// splitImageNotes separates the <image_note> blocks the model
+// appends for image messages from the user-visible reply.
+func splitImageNotes(response string) (visible, record string) {
+	notes := imageNoteRe.FindAllStringSubmatch(response, -1)
+	visible = strings.TrimSpace(imageNoteRe.ReplaceAllString(response, ""))
+
+	var parts []string
+	for _, n := range notes {
+		if desc := strings.TrimSpace(n[0][len("<image_note>") : len(n[0])-len("</image_note>")]); desc != "" {
+			parts = append(parts, desc)
+		}
+	}
+	return visible, strings.Join(parts, "; ")
+}
+
+// collectImageAttachments fetches the message's image attachments (up to
+// LLM.MaxImages) as processed data URIs.
+func (h *Handlers) collectImageAttachments(ctx context.Context, m *discordgo.MessageCreate) []string {
+	var urls []string
+	for _, a := range m.Attachments {
+		if strings.HasPrefix(a.ContentType, "image/") && len(urls) < h.BotConfig.LLM.MaxImages {
+			urls = append(urls, a.URL)
+		}
+	}
+
+	var dataURIs []string
+	for _, u := range urls {
+		duri, err := h.imageClient.ImageToDataURI(ctx, u)
+		if err != nil {
+			logger.FromContext(ctx).Warn("skipping unreadable image attachment", "url", u, "error", err)
+			continue
+		}
+		dataURIs = append(dataURIs, duri)
+	}
+	return dataURIs
 }
 
 // getPrompt checks if the bot is mentioned in a message or if the message is a reply to the bot, and formats the prompt with the user's display name.
@@ -199,20 +247,31 @@ func (h *Handlers) processChat(ctx context.Context, s commands.DiscordSession, m
 	}
 	latency := time.Since(start)
 
-	// Log the conversation for debugging
+	// Log the raw response (including any image notes) for debugging
 	h.Audit.LogConversation(ctx, m.GuildID, charID, prompt, reasoning, fullResponse, messages, latency, reqID)
 
+	visible, imageNotes := splitImageNotes(fullResponse)
+	if visible == "" {
+		visible = fullResponse
+	}
+
 	// Send the final response as a reply to the user
-	_, err = s.ChannelMessageSendReply(m.ChannelID, fullResponse, &discordgo.MessageReference{
+	_, err = s.ChannelMessageSendReply(m.ChannelID, visible, &discordgo.MessageReference{
 		MessageID: m.ID,
 	})
 	if err != nil {
 		return fmt.Errorf("error sending response: %v", err)
 	}
 
-	assistantMsg := llm.Message{Role: "assistant", Content: fullResponse}
-	assistantTokens := h.LLM.EstimateTokens(ctx, []llm.Message{assistantMsg})
-	h.Session.SaveMessage(ctx, m.GuildID, "", "assistant", fullResponse, assistantTokens)
+	h.Session.SaveMessage(ctx, m.GuildID, "", "assistant", visible)
+
+	// Attach the image descriptions to the user's turn so future prompts and
+	// compaction can see what the (ephemeral) images depicted.
+	if imageNotes != "" {
+		if err := h.Session.AppendToLastUserMessage(ctx, m.GuildID, "", "\n[Image: "+imageNotes+"]"); err != nil {
+			logger.FromContext(ctx).Error("failed to attach image note to history", "error", err)
+		}
+	}
 	return nil
 }
 
