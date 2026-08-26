@@ -2,18 +2,21 @@ package images
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"time"
 
 	"characterllm/internal/logger"
 )
 
-// ImageCache handles local storage of images.
+// maxCacheBytes bounds the total size of the image cache.
+var maxCacheBytes int64 = 512 << 20 // 512 MiB
+
+// ImageCache is the on-disk store for images: write, read, delete, evict.
+// It has no knowledge of where bytes come from or what they contain.
 type ImageCache struct {
 	Dir string
 }
@@ -26,40 +29,15 @@ func NewImageCache(dir string) *ImageCache {
 	return &ImageCache{Dir: dir}
 }
 
-// SaveImage downloads an image from the given URL and saves it to the local cache using a composite key of guild and character.
-// It returns the local file path to the saved image.
-func (c *ImageCache) SaveImage(ctx context.Context, guildID, characterID, urlStr string) (string, error) {
-	if !strings.HasPrefix(urlStr, "http://") && !strings.HasPrefix(urlStr, "https://") {
-		return "", fmt.Errorf("invalid image URL protocol: %s", urlStr)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
-	if err != nil {
-		return "", err
-	}
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("failed to download image: status %d", resp.StatusCode)
-	}
-
-	contentType := resp.Header.Get("Content-Type")
-	ext := ".png"
-	if strings.Contains(contentType, "jpeg") || strings.Contains(contentType, "jpg") {
-		ext = ".jpg"
-	} else if strings.Contains(contentType, "gif") {
-		ext = ".gif"
-	} else if strings.Contains(contentType, "webp") {
-		ext = ".webp"
-	}
-
-	filename := fmt.Sprintf("%s_%s%s", guildID, characterID, ext)
+// Save writes the image bytes to the cache under a composite key of guild and
+// character and returns the local file path. Any previous file for the same
+// key with a different extension is removed so prefix lookups stay
+// unambiguous.
+func (c *ImageCache) Save(guildID, characterID, ext string, data []byte) (string, error) {
+	filename := fmt.Sprintf("%s_%s%s", guildID, safeName(characterID), ext)
 	path := filepath.Join(c.Dir, filename)
+
+	c.evictOldImages(int64(len(data)))
 
 	out, err := os.Create(path)
 	if err != nil {
@@ -67,8 +45,18 @@ func (c *ImageCache) SaveImage(ctx context.Context, guildID, characterID, urlStr
 	}
 	defer out.Close()
 
-	if _, err := io.Copy(out, resp.Body); err != nil {
+	if _, err := out.Write(data); err != nil {
+		os.Remove(path)
 		return "", err
+	}
+
+	prefix := fmt.Sprintf("%s_%s.", guildID, safeName(characterID))
+	if files, err := os.ReadDir(c.Dir); err == nil {
+		for _, f := range files {
+			if f.Name() != filename && strings.HasPrefix(f.Name(), prefix) {
+				os.Remove(filepath.Join(c.Dir, f.Name()))
+			}
+		}
 	}
 
 	return path, nil
@@ -81,7 +69,7 @@ func (c *ImageCache) GetImage(guildID, characterID string) (string, error) {
 		return "", err
 	}
 
-	prefix := fmt.Sprintf("%s_%s.", guildID, characterID)
+	prefix := fmt.Sprintf("%s_%s.", guildID, safeName(characterID))
 	for _, f := range files {
 		if strings.HasPrefix(f.Name(), prefix) {
 			return filepath.Join(c.Dir, f.Name()), nil
@@ -98,7 +86,7 @@ func (c *ImageCache) DeleteImage(guildID, characterID string) error {
 		return err
 	}
 
-	prefix := fmt.Sprintf("%s_%s.", guildID, characterID)
+	prefix := fmt.Sprintf("%s_%s.", guildID, safeName(characterID))
 	for _, f := range files {
 		if strings.HasPrefix(f.Name(), prefix) {
 			if err := os.Remove(filepath.Join(c.Dir, f.Name())); err != nil {
@@ -109,24 +97,56 @@ func (c *ImageCache) DeleteImage(guildID, characterID string) error {
 	return nil
 }
 
-// ImageToBase64 reads an image file from the provided path and returns it as a Base64 encoded Data URI.
-func (c *ImageCache) ImageToBase64(ctx context.Context, path string) (string, error) {
-	data, err := os.ReadFile(path)
+// safeName restricts a string to filename-safe characters so it can never
+// introduce path separators.
+func safeName(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('_')
+		}
+	}
+	return b.String()
+}
+
+// evictOldImages removes the oldest cache files until an incoming file of the
+// given size fits under maxCacheBytes.
+func (c *ImageCache) evictOldImages(incoming int64) {
+	entries, err := os.ReadDir(c.Dir)
 	if err != nil {
-		return "", err
+		return
 	}
-
-	ext := filepath.Ext(path)
-	contentType := "image/png"
-	switch ext {
-	case ".jpg", ".jpeg":
-		contentType = "image/jpeg"
-	case ".gif":
-		contentType = "image/gif"
-	case ".webp":
-		contentType = "image/webp"
+	type file struct {
+		name    string
+		size    int64
+		modTime time.Time
 	}
-
-	encoded := base64.StdEncoding.EncodeToString(data)
-	return fmt.Sprintf("data:%s;base64,%s", contentType, encoded), nil
+	var files []file
+	var total int64
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		total += info.Size()
+		files = append(files, file{e.Name(), info.Size(), info.ModTime()})
+	}
+	if total+incoming <= maxCacheBytes {
+		return
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].modTime.Before(files[j].modTime) })
+	for _, f := range files {
+		if total+incoming <= maxCacheBytes {
+			break
+		}
+		if os.Remove(filepath.Join(c.Dir, f.name)) == nil {
+			total -= f.size
+		}
+	}
 }

@@ -429,3 +429,50 @@ func TestPruneAndSummarize_ZeroDeletionsPreservesHistory(t *testing.T) {
 		t.Errorf("Expected summary to be stored, got %q", summary)
 	}
 }
+
+func TestSetCharacterImage(t *testing.T) {
+	m, tmpFile := setupManager(t)
+	defer os.Remove(tmpFile)
+	defer m.Close()
+	ctx := context.Background()
+
+	guildID := "guild1"
+	m.SaveCharacterCard(ctx, guildID, &CharacterCard{CharacterID: "char1", DisplayName: "C"}, nil)
+
+	if err := m.SetCharacterImage(ctx, guildID, "char1", "http://img.example/c.png"); err != nil {
+		t.Fatalf("SetCharacterImage failed: %v", err)
+	}
+
+	card, err := m.GetCharacterCard(ctx, guildID, "char1")
+	if err != nil {
+		t.Fatalf("GetCharacterCard failed: %v", err)
+	}
+	if card.ImageURL != "http://img.example/c.png" {
+		t.Errorf("expected image URL on card, got %q", card.ImageURL)
+	}
+
+	if err := m.SetCharacterImage(ctx, guildID, "missing", "http://img.example/x.png"); err == nil {
+		t.Error("expected error for unknown character")
+	}
+}
+
+func TestCharacterDetailsIncludesImageURL(t *testing.T) {
+	m, tmpFile := setupManager(t)
+	defer os.Remove(tmpFile)
+	defer m.Close()
+	ctx := context.Background()
+
+	guildID := "guild1"
+	m.SaveCharacterCard(ctx, guildID, &CharacterCard{CharacterID: "char1", DisplayName: "C"}, nil)
+	m.SetCharacterImage(ctx, guildID, "char1", "http://img.example/c.png")
+	m.SetActiveCharacter(ctx, guildID, "char1")
+
+	details, err := m.GetCharacterDetails(ctx, guildID)
+	if err != nil {
+		t.Fatalf("GetCharacterDetails failed: %v", err)
+	}
+	if details.ImageURL != "http://img.example/c.png" {
+		t.Errorf("expected image URL in details, got %q", details.ImageURL)
+	}
+}
+

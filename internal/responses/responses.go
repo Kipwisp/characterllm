@@ -50,6 +50,22 @@ var (
 		SetSuccess:   "Character set to **%s**!",
 	}
 
+	SetAvatar = struct {
+		Success       string
+		NoCharacter   string
+		MissingSource string
+		DownloadError string
+		TooLarge      string
+		AvatarError   string
+	}{
+		Success:       "Avatar updated successfully!",
+		NoCharacter:   "No active character in this server. Use /setcharacter first.",
+		MissingSource: "Provide an image via the image option.",
+		DownloadError: "Failed to download the image.",
+		TooLarge:      "That image is too large to use as a Discord avatar.",
+		AvatarError:   "The image was saved, but Discord rejected the avatar update.",
+	}
+
 	ResetChat = struct {
 		Success string
 	}{

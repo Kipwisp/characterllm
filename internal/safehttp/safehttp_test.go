@@ -1,0 +1,88 @@
+package safehttp
+
+import (
+	"context"
+	"net"
+	"testing"
+)
+
+func TestValidate(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("rejects non-https schemes", func(t *testing.T) {
+		for _, raw := range []string{
+			"file:///etc/passwd",
+			"ftp://example.com/img.png",
+			"http://example.com/img.png",
+		} {
+			if _, _, err := Validate(ctx, raw); err == nil {
+				t.Errorf("expected rejection for %s", raw)
+			}
+		}
+	})
+
+	t.Run("rejects unresolvable host", func(t *testing.T) {
+		if _, _, err := Validate(ctx, "https://no-such-host.invalid/img.png"); err == nil {
+			t.Error("expected error for unresolvable host")
+		}
+	})
+
+	t.Run("rejects loopback and private ranges", func(t *testing.T) {
+		for _, raw := range []string{
+			"https://127.0.0.1/img.png",
+			"https://2130706433/img.png",
+			"https://10.0.0.5/img.png",
+			"https://192.168.1.10/img.png",
+			"https://169.254.169.254/latest/meta-data/",
+			"https://100.64.0.1/img.png",
+			"https://[::1]/img.png",
+			"https://[fc00::1]/img.png",
+			"https://0.0.0.0/img.png",
+		} {
+			if _, _, err := Validate(ctx, raw); err == nil {
+				t.Errorf("expected rejection for %s", raw)
+			}
+		}
+	})
+
+	t.Run("pins the resolved address", func(t *testing.T) {
+		// IP literals skip DNS; the pinned URL must dial the exact
+		// validated address on the https default port.
+		pinned, host, err := Validate(ctx, "https://93.184.216.34/img.png")
+		if err != nil {
+			t.Fatalf("expected public IP literal to be allowed, got %v", err)
+		}
+		if host != "93.184.216.34" {
+			t.Errorf("expected original host, got %s", host)
+		}
+		if pinned != "https://93.184.216.34:443/img.png" {
+			t.Errorf("expected pinned URL, got %s", pinned)
+		}
+	})
+}
+
+func TestIsDisallowedIP(t *testing.T) {
+	disallowed := []string{
+		"127.0.0.1", "127.8.8.8",
+		"10.1.2.3", "172.16.0.1", "172.31.255.255", "192.168.1.1",
+		"169.254.169.254", "169.254.0.1",
+		"100.64.0.1", "100.127.255.255",
+		"0.0.0.0",
+		"::1", "fe80::1", "fc00::1", "fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+	}
+	for _, s := range disallowed {
+		if !isDisallowedIP(net.ParseIP(s)) {
+			t.Errorf("expected %s to be disallowed", s)
+		}
+	}
+
+	allowed := []string{
+		"93.184.216.34", "8.8.8.8", "172.32.0.1", "100.128.0.1",
+		"2606:4700:4700::1111", "2001:4860:4860::8888",
+	}
+	for _, s := range allowed {
+		if isDisallowedIP(net.ParseIP(s)) {
+			t.Errorf("expected %s to be allowed", s)
+		}
+	}
+}

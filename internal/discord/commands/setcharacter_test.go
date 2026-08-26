@@ -474,7 +474,7 @@ func TestHandleSetCharacterImage_Success(t *testing.T) {
 		DisplayName: "Test Character",
 	}, []string{})
 	sm.SetActiveCharacter(context.Background(), guildID, charID)
-	sm.SetCharacterImage(context.Background(), guildID, selectedURL)
+	sm.SetCharacterImage(context.Background(), guildID, charID, selectedURL)
 	sm.SaveImageCandidates(context.Background(), guildID, []string{selectedURL})
 
 	// Mock Image Client

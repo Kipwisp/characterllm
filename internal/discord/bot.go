@@ -4,7 +4,6 @@ package discord
 
 import (
 	"characterllm/internal/discord/commands"
-	"context"
 	"log/slog"
 
 	"github.com/bwmarrin/discordgo"
@@ -47,27 +46,8 @@ func (b *Bot) Start() error {
 	)
 
 	b.RegisterCommands()
-	b.SyncNicknames()
 
 	return nil
-}
-
-// SyncNicknames updates the bot's nickname in all guilds to match the set character persona.
-func (b *Bot) SyncNicknames() {
-	slog.Info("synchronizing nicknames across guilds")
-	for _, guild := range b.Session.State.Guilds {
-		details, err := b.Handlers.Session.GetCharacterDetails(context.Background(), guild.ID)
-		if err != nil || details == nil || details.DisplayName == "" {
-			continue
-		}
-		nickname := details.DisplayName
-		err = b.Session.GuildMemberNickname(guild.ID, "@me", nickname)
-		if err != nil {
-			slog.Error("could not sync nickname", "guild_id", guild.ID, "error", err)
-		} else {
-			slog.Info("synced nickname", "nickname", nickname, "guild_id", guild.ID)
-		}
-	}
 }
 
 // RegisterCommands registers the bot's slash commands globally.

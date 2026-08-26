@@ -53,6 +53,10 @@ func (c *setCharacterCmd) Execute(ctx context.Context, cmdCtx CommandContext, s 
 		return err
 	}
 
+	if err := ApplyCharacterAvatar(ctx, cmdCtx, s, i.GuildID, card.CharacterID, card.ImageURL); err != nil {
+		logger.FromContext(ctx).Warn("failed to apply character avatar", "error", err, "guild_id", i.GuildID)
+	}
+
 	return c.searchAndProcessImages(ctx, cmdCtx, s, i, card)
 }
 
@@ -340,8 +344,20 @@ func HandleSetCharacterImage(ctx context.Context, cmdCtx CommandContext, s Disco
 	}
 	selectedURL := candidates[idx]
 
-	// Save image URL to database
-	if err := cmdCtx.GetSession().SetCharacterImage(ctx, i.GuildID, selectedURL); err != nil {
+	details, err := cmdCtx.GetSession().GetCharacterDetails(ctx, i.GuildID)
+	if err != nil {
+		logger.FromContext(ctx).Error("failed to get active character details", "error", err, "guild_id", i.GuildID)
+		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content: responses.SetCharacter.ImageError,
+			},
+		})
+		return
+	}
+
+	// Save image URL to the character card
+	if err := cmdCtx.GetSession().SetCharacterImage(ctx, i.GuildID, details.CharacterID, selectedURL); err != nil {
 		logger.FromContext(ctx).Error("failed to save character image", "error", err, "guild_id", i.GuildID)
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
@@ -356,18 +372,6 @@ func HandleSetCharacterImage(ctx context.Context, cmdCtx CommandContext, s Disco
 	imgClient := cmdCtx.GetImageClient()
 	if imgClient == nil {
 		logger.FromContext(ctx).Error("no image client available in context")
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: responses.SetCharacter.ImageError,
-			},
-		})
-		return
-	}
-
-	details, err := cmdCtx.GetSession().GetCharacterDetails(ctx, i.GuildID)
-	if err != nil {
-		logger.FromContext(ctx).Error("failed to get active character details", "error", err, "guild_id", i.GuildID)
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{

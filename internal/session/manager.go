@@ -24,6 +24,7 @@ type CharacterCard struct {
 	SourceURL    string
 	Modifiers    string
 	Scenario     string
+	ImageURL     string
 }
 
 // CharacterDetails represents the active character persona for a guild.
@@ -31,6 +32,7 @@ type CharacterDetails struct {
 	CharacterID string
 	DisplayName string
 	Description string
+	ImageURL    string
 }
 
 // Manager handles the persistence and retrieval of character data and conversation history for Discord guilds.
@@ -68,7 +70,7 @@ func (m *Manager) GetCharacterCard(ctx context.Context, guildID, characterID str
 	defer m.mu.RUnlock()
 
 	var card CharacterCard
-	err := m.db.QueryRow("SELECT guild_id, character_id, COALESCE(official_name, ''), COALESCE(series, ''), COALESCE(display_name, ''), COALESCE(description, ''), COALESCE(source_url, ''), COALESCE(modifiers, ''), COALESCE(scenario, '') FROM character_cards WHERE guild_id = ? AND character_id = ?", guildID, characterID).Scan(&card.GuildID, &card.CharacterID, &card.OfficialName, &card.Series, &card.DisplayName, &card.Description, &card.SourceURL, &card.Modifiers, &card.Scenario)
+	err := m.db.QueryRow("SELECT guild_id, character_id, COALESCE(official_name, ''), COALESCE(series, ''), COALESCE(display_name, ''), COALESCE(description, ''), COALESCE(source_url, ''), COALESCE(modifiers, ''), COALESCE(scenario, ''), COALESCE(image_url, '') FROM character_cards WHERE guild_id = ? AND character_id = ?", guildID, characterID).Scan(&card.GuildID, &card.CharacterID, &card.OfficialName, &card.Series, &card.DisplayName, &card.Description, &card.SourceURL, &card.Modifiers, &card.Scenario, &card.ImageURL)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -94,7 +96,7 @@ func (m *Manager) GetCardByAlias(ctx context.Context, guildID, alias string) (*C
 	}
 
 	var card CharacterCard
-	err = m.db.QueryRow("SELECT guild_id, character_id, COALESCE(official_name, ''), COALESCE(series, ''), COALESCE(display_name, ''), COALESCE(description, ''), COALESCE(source_url, ''), COALESCE(modifiers, ''), COALESCE(scenario, '') FROM character_cards WHERE guild_id = ? AND character_id = ?", guildID, characterID).Scan(&card.GuildID, &card.CharacterID, &card.OfficialName, &card.Series, &card.DisplayName, &card.Description, &card.SourceURL, &card.Modifiers, &card.Scenario)
+	err = m.db.QueryRow("SELECT guild_id, character_id, COALESCE(official_name, ''), COALESCE(series, ''), COALESCE(display_name, ''), COALESCE(description, ''), COALESCE(source_url, ''), COALESCE(modifiers, ''), COALESCE(scenario, ''), COALESCE(image_url, '') FROM character_cards WHERE guild_id = ? AND character_id = ?", guildID, characterID).Scan(&card.GuildID, &card.CharacterID, &card.OfficialName, &card.Series, &card.DisplayName, &card.Description, &card.SourceURL, &card.Modifiers, &card.Scenario, &card.ImageURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load card for alias %s in guild %s: %w", alias, guildID, err)
 	}
@@ -135,7 +137,7 @@ func (m *Manager) GetGuildCharacters(ctx context.Context, guildID string) ([]*Ch
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	rows, err := m.db.Query("SELECT guild_id, character_id, COALESCE(official_name, ''), COALESCE(series, ''), COALESCE(display_name, ''), COALESCE(description, ''), COALESCE(source_url, ''), COALESCE(modifiers, ''), COALESCE(scenario, '') FROM character_cards WHERE guild_id = ?", guildID)
+	rows, err := m.db.Query("SELECT guild_id, character_id, COALESCE(official_name, ''), COALESCE(series, ''), COALESCE(display_name, ''), COALESCE(description, ''), COALESCE(source_url, ''), COALESCE(modifiers, ''), COALESCE(scenario, ''), COALESCE(image_url, '') FROM character_cards WHERE guild_id = ?", guildID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to retrieve characters for guild %s: %w", guildID, err)
 	}
@@ -144,7 +146,7 @@ func (m *Manager) GetGuildCharacters(ctx context.Context, guildID string) ([]*Ch
 	var cards []*CharacterCard
 	for rows.Next() {
 		var card CharacterCard
-		if err := rows.Scan(&card.GuildID, &card.CharacterID, &card.OfficialName, &card.Series, &card.DisplayName, &card.Description, &card.SourceURL, &card.Modifiers, &card.Scenario); err != nil {
+		if err := rows.Scan(&card.GuildID, &card.CharacterID, &card.OfficialName, &card.Series, &card.DisplayName, &card.Description, &card.SourceURL, &card.Modifiers, &card.Scenario, &card.ImageURL); err != nil {
 			return nil, fmt.Errorf("failed to scan character card for guild %s: %w", guildID, err)
 		}
 		cards = append(cards, &card)
@@ -162,8 +164,7 @@ func (m *Manager) initDB() error {
 	queries := []string{
 		`CREATE TABLE IF NOT EXISTS guild_config (
 			guild_id TEXT PRIMARY KEY,
-			active_character_id TEXT,
-			image_url TEXT
+			active_character_id TEXT
 		);`,
 		`CREATE TABLE IF NOT EXISTS character_cards (
 			guild_id TEXT,
@@ -175,6 +176,7 @@ func (m *Manager) initDB() error {
 			source_url TEXT,
 			modifiers TEXT,
 			scenario TEXT,
+			image_url TEXT DEFAULT '',
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			PRIMARY KEY (guild_id, character_id)
 		);`,
@@ -223,27 +225,6 @@ func (m *Manager) initDB() error {
 		return fmt.Errorf("failed to create character history index: %v", err)
 	}
 
-	if err := m.migrateChatHistoryTokens(); err != nil {
-		return fmt.Errorf("failed to migrate chat_history tokens column: %v", err)
-	}
-
-	return nil
-}
-
-// migrateChatHistoryTokens adds the tokens column to chat_history for databases
-// created before the column existed.
-func (m *Manager) migrateChatHistoryTokens() error {
-	var count int
-	err := m.db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('chat_history') WHERE name = 'tokens'").Scan(&count)
-	if err != nil {
-		return fmt.Errorf("failed to inspect chat_history schema: %w", err)
-	}
-	if count > 0 {
-		return nil
-	}
-	if _, err := m.db.Exec("ALTER TABLE chat_history ADD COLUMN tokens INTEGER DEFAULT 0"); err != nil {
-		return fmt.Errorf("failed to add tokens column to chat_history: %w", err)
-	}
 	return nil
 }
 
@@ -329,14 +310,17 @@ func (m *Manager) SetActiveCharacter(ctx context.Context, guildID string, charac
 	return nil
 }
 
-// SetCharacterImage updates the profile image URL for the character in a guild.
-func (m *Manager) SetCharacterImage(ctx context.Context, guildID string, imageURL string) error {
+// SetCharacterImage stores the profile image URL on the character card.
+func (m *Manager) SetCharacterImage(ctx context.Context, guildID, characterID, imageURL string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	_, err := m.db.Exec("UPDATE guild_config SET image_url = ? WHERE guild_id = ?", imageURL, guildID)
+	res, err := m.db.Exec("UPDATE character_cards SET image_url = ? WHERE guild_id = ? AND character_id = ?", imageURL, guildID, characterID)
 	if err != nil {
-		return fmt.Errorf("failed to set character image for guild %s: %w", guildID, err)
+		return fmt.Errorf("failed to set character image for character %s in guild %s: %w", characterID, guildID, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("character %s not found in guild %s", characterID, guildID)
 	}
 	return nil
 }
@@ -378,10 +362,10 @@ func (m *Manager) GetCharacterDetails(ctx context.Context, guildID string) (*Cha
 
 	var details CharacterDetails
 	err := m.db.QueryRow(`
-		SELECT s.active_character_id, c.display_name, c.description
+		SELECT s.active_character_id, c.display_name, c.description, COALESCE(c.image_url, '')
 		FROM guild_config s
 		JOIN character_cards c ON s.active_character_id = c.character_id
-		WHERE s.guild_id = ?`, guildID).Scan(&details.CharacterID, &details.DisplayName, &details.Description)
+		WHERE s.guild_id = ?`, guildID).Scan(&details.CharacterID, &details.DisplayName, &details.Description, &details.ImageURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get character details for guild %s: %w", guildID, err)
 	}

@@ -212,9 +212,9 @@ func HandleSelectCharacterCard(ctx context.Context, cmdCtx CommandContext, s Dis
 		return
 	}
 
-	// Update bot nickname
-	if err := s.GuildMemberNickname(i.GuildID, "@me", card.DisplayName); err != nil {
-		logger.FromContext(ctx).Error("could not update bot nickname", "error", err, "guild_id", i.GuildID)
+	// Sync bot identity (nickname + avatar) to the selected character
+	if err := SyncGuildIdentity(ctx, cmdCtx, s, i.GuildID); err != nil {
+		logger.FromContext(ctx).Warn("failed to sync guild identity", "error", err, "guild_id", i.GuildID)
 	}
 
 	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{

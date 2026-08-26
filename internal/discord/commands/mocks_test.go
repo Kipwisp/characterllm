@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"fmt"
 
 	"characterllm/internal/audit"
 	"characterllm/internal/config"
@@ -37,6 +38,7 @@ func (m *mockSynthesizer) FetchCharacter(ctx context.Context, analysis *research
 type mockImageClient struct {
 	SearchImagesFn  func(ctx context.Context, query string, limit int) ([]search.Image, error)
 	SaveImageFn     func(ctx context.Context, guildID, characterID, url string) (string, error)
+	GetImageFn      func(guildID, characterID string) (string, error)
 	ImageToBase64Fn func(ctx context.Context, path string) (string, error)
 	GetCacheFn      func() *images.ImageCache
 }
@@ -53,6 +55,13 @@ func (m *mockImageClient) SaveImage(ctx context.Context, guildID, characterID, u
 		return "", nil
 	}
 	return m.SaveImageFn(ctx, guildID, characterID, url)
+}
+
+func (m *mockImageClient) GetImage(guildID, characterID string) (string, error) {
+	if m.GetImageFn == nil {
+		return "", fmt.Errorf("no cached image")
+	}
+	return m.GetImageFn(guildID, characterID)
 }
 
 func (m *mockImageClient) ImageToBase64(ctx context.Context, path string) (string, error) {
