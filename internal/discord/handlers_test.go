@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"characterllm/internal/audit"
 	"characterllm/internal/config"
@@ -686,6 +688,186 @@ func TestProcessChat_Error(t *testing.T) {
 // that exceeds the soft target must result in the handler invoking compaction
 // after the reply. The compaction and prompt-assembly logic itself is covered
 // by the tests in internal/conversation.
+func TestHandleMessageCreate_SerializesSameConversation(t *testing.T) {
+	h, llmMock, sm, dbPath := setupHandlers(t)
+	defer os.Remove(dbPath)
+
+	ctx := context.Background()
+	guildID := "guild1"
+	charID := "char1"
+	sm.SaveCharacterCard(ctx, guildID, &session.CharacterCard{
+		CharacterID: charID,
+		DisplayName: "TestChar",
+		Description: "A test character",
+	}, []string{})
+	sm.SetActiveCharacter(ctx, guildID, charID)
+
+	var mu sync.Mutex
+	var callCount int
+	var prompts [][]llm.Message
+	firstCallReached := make(chan struct{})
+	release := make(chan struct{})
+	llmMock.GenerateResponseFn = func(ctx context.Context, messages []llm.Message, model string) (string, string, error) {
+		mu.Lock()
+		callCount++
+		n := callCount
+		prompts = append(prompts, messages)
+		mu.Unlock()
+		if n == 1 {
+			close(firstCallReached)
+			<-release
+			return "Reply one", "", nil
+		}
+		return "Reply two", "", nil
+	}
+
+	s := &mockDiscordSession{
+		GetUserMentionFn: func() string { return "<@123>" },
+		ChannelMessageSendReplyFn: func(channelID string, content string, response *discordgo.MessageReference) (*discordgo.Message, error) {
+			return nil, nil
+		},
+	}
+
+	m1 := &discordgo.MessageCreate{Message: &discordgo.Message{
+		ChannelID: "ch1",
+		Content:   "<@123> First!",
+		Author:    &discordgo.User{Bot: false},
+	}}
+	m1.GuildID = guildID
+	m2 := &discordgo.MessageCreate{Message: &discordgo.Message{
+		ChannelID: "ch1",
+		Content:   "<@123> Second!",
+		Author:    &discordgo.User{Bot: false},
+	}}
+	m2.GuildID = guildID
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); h.handleMessageCreate(s, m1) }()
+
+	<-firstCallReached // turn 1 is blocked in the LLM call while holding the lock
+
+	go func() { defer wg.Done(); h.handleMessageCreate(s, m2) }()
+	close(release)
+	wg.Wait()
+
+	mu.Lock()
+	if callCount != 2 {
+		t.Fatalf("expected 2 LLM calls, got %d", callCount)
+	}
+	secondPrompt := prompts[1]
+	mu.Unlock()
+
+	foundFirstReply := false
+	for _, msg := range secondPrompt {
+		if msg.Role == "assistant" && msg.Content == "Reply one" {
+			foundFirstReply = true
+		}
+	}
+	if !foundFirstReply {
+		t.Error("second turn's prompt is missing the first turn's assistant reply")
+	}
+
+	history, err := sm.GetHistory(ctx, guildID, "", 100, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 4 {
+		t.Fatalf("expected 4 history rows, got %d: %+v", len(history), history)
+	}
+	// The whole turn is serialized, so history is in strict conversation
+	// order: the second user message is stored only after the first reply.
+	want := []string{"First!", "Reply one", "Second!", "Reply two"}
+	wantRoles := []string{"user", "assistant", "user", "assistant"}
+	for i, msg := range history {
+		if msg.Role != wantRoles[i] {
+			t.Errorf("row %d: expected role %q, got %q", i, wantRoles[i], msg.Role)
+		}
+		if !strings.Contains(msg.Content, want[i]) {
+			t.Errorf("row %d: expected content containing %q, got %q", i, want[i], msg.Content)
+		}
+	}
+}
+
+func TestHandleMessageCreate_ParallelAcrossConversations(t *testing.T) {
+	h, llmMock, sm, dbPath := setupHandlers(t)
+	defer os.Remove(dbPath)
+
+	ctx := context.Background()
+	for _, guildID := range []string{"guildA", "guildB"} {
+		sm.SaveCharacterCard(ctx, guildID, &session.CharacterCard{
+			CharacterID: "char1",
+			DisplayName: "TestChar",
+			Description: "A test character",
+		}, []string{})
+		sm.SetActiveCharacter(ctx, guildID, "char1")
+	}
+
+	var mu sync.Mutex
+	var callCount int
+	firstCallReached := make(chan struct{})
+	release := make(chan struct{})
+	llmMock.GenerateResponseFn = func(ctx context.Context, messages []llm.Message, model string) (string, string, error) {
+		mu.Lock()
+		callCount++
+		n := callCount
+		mu.Unlock()
+		if n == 1 {
+			close(firstCallReached)
+			<-release
+		}
+		return "Reply", "", nil
+	}
+
+	repliedTo := make(chan string, 2)
+	s := &mockDiscordSession{
+		GetUserMentionFn: func() string { return "<@123>" },
+		ChannelMessageSendReplyFn: func(channelID string, content string, response *discordgo.MessageReference) (*discordgo.Message, error) {
+			repliedTo <- channelID
+			return nil, nil
+		},
+	}
+
+	mA := &discordgo.MessageCreate{Message: &discordgo.Message{
+		ChannelID: "chA", Content: "<@123> Hello A", Author: &discordgo.User{Bot: false},
+	}}
+	mA.GuildID = "guildA"
+	mB := &discordgo.MessageCreate{Message: &discordgo.Message{
+		ChannelID: "chB", Content: "<@123> Hello B", Author: &discordgo.User{Bot: false},
+	}}
+	mB.GuildID = "guildB"
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); h.handleMessageCreate(s, mA) }()
+	go func() { defer wg.Done(); h.handleMessageCreate(s, mB) }()
+
+	// One conversation must complete while the first LLM call holds its
+	// conversation lock: the lock is per-conversation, not global.
+	select {
+	case <-repliedTo:
+	case <-firstCallReached:
+		// The first LLM call is in flight but neither turn has replied yet;
+		// wait for the other conversation to get through.
+		select {
+		case <-repliedTo:
+		case <-time.After(5 * time.Second):
+			t.Fatal("second conversation did not complete while the first was blocked")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no progress: neither conversation replied nor reached the LLM call")
+	}
+
+	close(release)
+	wg.Wait()
+
+	select {
+	case <-repliedTo:
+	default:
+		t.Error("expected both conversations to reply")
+	}
+}
+
 func TestCompaction_TriggeredThroughHandler(t *testing.T) {
 	h, llmMock, sm, dbPath := setupHandlers(t)
 	defer os.Remove(dbPath)

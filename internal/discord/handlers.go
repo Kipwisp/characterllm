@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"characterllm/internal/audit"
@@ -36,6 +37,8 @@ type Handlers struct {
 	imageClient         images.ImageClient
 	builder             *conversation.PromptBuilder
 	compactor           *conversation.Compactor
+
+	conversationLocks sync.Map // map[string]*sync.Mutex, keyed by guildID + "|" + threadID
 }
 
 // NewHandlers creates a new Handlers instance with the provided dependencies.
@@ -98,6 +101,15 @@ func (h *Handlers) GetImageClient() images.ImageClient {
 	return h.imageClient
 }
 
+// LockConversation acquires the lock for the (guildID, threadID) conversation
+// and returns a function that releases it.
+func (h *Handlers) LockConversation(guildID, threadID string) func() {
+	v, _ := h.conversationLocks.LoadOrStore(guildID+"|"+threadID, &sync.Mutex{})
+	mu := v.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
+
 // MessageCreate handles incoming Discord messages. It triggers LLM responses when the bot is mentioned.
 func (h *Handlers) MessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 	h.handleMessageCreate(NewSessionWrapper(s), m)
@@ -135,6 +147,10 @@ func (h *Handlers) handleMessageCreate(s commands.DiscordSession, m *discordgo.M
 	if h.BotConfig.LLM.Vision {
 		imageDataURIs = h.collectImageAttachments(ctx, m)
 	}
+
+	// Serialize the whole turn (save, assemble, generate, persist) so a queued
+	// turn assembles its prompt after the previous turn's reply is stored.
+	defer h.LockConversation(m.GuildID, "")()
 
 	// Persist the incoming message before assembling the prompt
 	userMsg := llm.Message{Role: "user", Content: prompt, Images: imageDataURIs}

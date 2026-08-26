@@ -59,3 +59,6 @@ func (m *mockCommandContext) GetImageSearchProvider() search.ImageSearchProvider
 }
 func (m *mockCommandContext) GetSynthesizer() research.Synthesizer { return m.Synthesizer }
 func (m *mockCommandContext) GetImageClient() images.ImageClient   { return m.ImageClient }
+func (m *mockCommandContext) LockConversation(guildID, threadID string) func() {
+	return func() {}
+}

@@ -18,6 +18,7 @@ func (c *resetChatCmd) Definition() *discordgo.ApplicationCommand {
 
 // Execute clears the conversation history for the guild.
 func (c *resetChatCmd) Execute(ctx context.Context, cmdCtx CommandContext, s DiscordSession, i *discordgo.InteractionCreate) error {
+	defer cmdCtx.LockConversation(i.GuildID, "")()
 	cmdCtx.GetSession().ClearHistory(ctx, i.GuildID, "")
 	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,

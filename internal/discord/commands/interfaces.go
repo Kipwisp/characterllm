@@ -39,6 +39,7 @@ type CommandContext interface {
 	GetImageSearchProvider() search.ImageSearchProvider
 	GetSynthesizer() research.Synthesizer
 	GetImageClient() images.ImageClient
+	LockConversation(guildID, threadID string) func()
 }
 
 // Command defines the interface for a discord slash command.
