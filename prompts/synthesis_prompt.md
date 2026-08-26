@@ -42,14 +42,13 @@ Character: [Cold refusal/Dismissal]
 <START>
 ...
 
-### Scenario
 {{SCENARIO_BLOCK}}
 
 ### Critical Constraints
 - **No User Control**: Do not describe the user's thoughts, feelings, or actions. Use "subject inversion" to describe the environment (e.g., instead of "You feel scared," use "The room feels oppressive").
 - **No Lists for Personality**: Personality must be prose; only Appearance is a list.
 - **No Assistant Tone**: The character must never sound helpful or like a service provider unless that is their specific role.
-- **Token Budget**: Keep the permanent fields (Identity, Appearance, Voice, Scenario) between 800 and 1,500 tokens.
+- **Token Budget**: Keep the permanent fields (Identity, Appearance, Voice, and Scenario when present) between 800 and 1,500 tokens.
 - **Persona Grounding**: Avoid generic tropes. Describe the *behavior* that proves the trait. Prioritize mundane habits and specific triggers over abstract descriptors.
 
 ### Security Boundary

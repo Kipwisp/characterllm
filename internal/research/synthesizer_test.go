@@ -137,3 +137,84 @@ func TestSynthesizer_FetchCharacter(t *testing.T) {
 		}
 	})
 }
+
+func TestSynthesizer_ScenarioBlock(t *testing.T) {
+	cfg := &config.Config{
+		LLM: config.LLMConfig{
+			MaxRetries: 1,
+			Model:      "test-model",
+		},
+	}
+	// Mirrors the real synthesis prompt: the placeholder stands alone; the
+	// scenario header is supplied by the injected block, not the file.
+	ps := &prompts.Set{
+		Synthesis: "### Output Structure\n{{SCENARIO_BLOCK}}\n### Input Data\n{{RESULTS}}",
+	}
+
+	capturePrompt := func(analysis *AnalysisResult) string {
+		mockSearch := &mockSearchProvider{
+			Results: []search.SearchResult{{Title: "Wiki", URL: "url", Snippet: "Content"}},
+		}
+		var captured string
+		mockLLM, _ := queueLLM([]string{"### Identity & Temperament\nspec"}, []string{"r"})
+		mockLLM.GenerateResponseFn = func(ctx context.Context, msgs []llm.Message, model string) (string, string, error) {
+			captured = msgs[0].Content
+			return "### Identity & Temperament\nspec", "r", nil
+		}
+		s := NewSynthesizer(mockSearch, mockLLM, cfg, ps)
+		if _, err := s.FetchCharacter(context.Background(), analysis); err != nil {
+			t.Fatalf("FetchCharacter failed: %v", err)
+		}
+		return captured
+	}
+
+	with := capturePrompt(&AnalysisResult{OfficialName: "Test Char", Scenario: "in a luxury hotel"})
+	if strings.Count(with, "### Scenario") != 1 {
+		t.Errorf("Expected exactly one '### Scenario' header with a scenario, got %d:\n%s", strings.Count(with, "### Scenario"), with)
+	}
+	if !strings.Contains(with, "in a luxury hotel") {
+		t.Errorf("Expected scenario text in synthesis prompt, got:\n%s", with)
+	}
+
+	without := capturePrompt(&AnalysisResult{OfficialName: "Test Char"})
+	if strings.Count(without, "### Scenario") != 0 {
+		t.Errorf("Expected no '### Scenario' section without a scenario, got:\n%s", without)
+	}
+}
+
+func TestParseSynthesis_StripsUnrequestedScenario(t *testing.T) {
+	s := &SynthesizerClient{}
+
+	t.Run("mid-spec section removed, following sections kept", func(t *testing.T) {
+		output := "STATUS: OK\n### Identity & Temperament\nidentity\n\n### Scenario\nin a hotel\n\n### Voice\nvoice"
+		res := s.parseSynthesis(output, "")
+		want := "### Identity & Temperament\nidentity\n\n### Voice\nvoice"
+		if res.PersonaSpec != want {
+			t.Errorf("got %q, want %q", res.PersonaSpec, want)
+		}
+	})
+
+	t.Run("trailing section removed", func(t *testing.T) {
+		output := "### Identity & Temperament\nidentity\n\n### Scenario\nin a hotel"
+		res := s.parseSynthesis(output, "")
+		if res.PersonaSpec != "### Identity & Temperament\nidentity" {
+			t.Errorf("got %q", res.PersonaSpec)
+		}
+	})
+
+	t.Run("no scenario section unchanged", func(t *testing.T) {
+		output := "### Identity & Temperament\nidentity\n\n### Voice\nvoice"
+		res := s.parseSynthesis(output, "")
+		if res.PersonaSpec != output {
+			t.Errorf("got %q", res.PersonaSpec)
+		}
+	})
+
+	t.Run("requested scenario kept", func(t *testing.T) {
+		output := "### Identity & Temperament\nidentity\n\n### Scenario\nin a hotel"
+		res := s.parseSynthesis(output, "in a hotel")
+		if !strings.Contains(res.PersonaSpec, "### Scenario") {
+			t.Errorf("expected scenario section to be kept, got %q", res.PersonaSpec)
+		}
+	})
+}

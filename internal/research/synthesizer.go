@@ -158,7 +158,7 @@ func (s *SynthesizerClient) FetchCharacter(ctx context.Context, analysis *Analys
 			return nil, fmt.Errorf("synthesis failed: %w", err)
 		}
 
-		res := s.parseSynthesis(profile)
+		res := s.parseSynthesis(profile, analysis.Scenario)
 
 		// If status is OK or explicitly marked as failure (UNKNOWN/AMBIGUOUS), accept it.
 		// If status is UNKNOWN but it didn't start with "STATUS:", it's a formatting error (missing headers).
@@ -180,7 +180,7 @@ func (s *SynthesizerClient) FetchCharacter(ctx context.Context, analysis *Analys
 }
 
 // parseSynthesis extracts a SynthesisResult from the LLM's formatted response.
-func (s *SynthesizerClient) parseSynthesis(output string) *SynthesisResult {
+func (s *SynthesizerClient) parseSynthesis(output, scenario string) *SynthesisResult {
 	if strings.HasPrefix(output, "STATUS: UNKNOWN") {
 		return &SynthesisResult{Status: "UNKNOWN"}
 	}
@@ -197,11 +197,29 @@ func (s *SynthesizerClient) parseSynthesis(output string) *SynthesisResult {
 	// The persona spec starts after the metadata
 	// We find the first header "### Identity & Temperament"
 	idx := strings.Index(output, "### Identity & Temperament")
-	if idx != -1 {
-		res.PersonaSpec = output[idx:]
-	} else {
+	if idx == -1 {
 		res.Status = "UNKNOWN"
+		return res
 	}
-
+	res.PersonaSpec = output[idx:]
+	if scenario == "" {
+		res.PersonaSpec = stripScenarioSection(res.PersonaSpec)
+	}
 	return res
+}
+
+// stripScenarioSection removes a model-written "### Scenario" section from the
+// persona spec, preserving any sections that follow it.
+func stripScenarioSection(spec string) string {
+	const marker = "\n### Scenario\n"
+	start := strings.Index(spec, marker)
+	if start == -1 {
+		return spec
+	}
+	before := strings.TrimRight(spec[:start], "\n")
+	rest := spec[start+len(marker):]
+	if next := strings.Index(rest, "\n### "); next != -1 {
+		return before + "\n\n" + rest[next+1:]
+	}
+	return before
 }
