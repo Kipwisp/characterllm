@@ -1,0 +1,108 @@
+package commands
+
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	"characterllm/internal/audit"
+	"characterllm/internal/images"
+	"characterllm/internal/llm"
+	"characterllm/internal/research"
+	"characterllm/internal/session"
+
+	"github.com/bwmarrin/discordgo"
+)
+
+// Deps holds the dependencies of the command registry.
+type Deps struct {
+	Session     *session.Manager
+	LLM         llm.LLMClient
+	Audit       *audit.AuditLogger
+	ImageClient images.ImageClient
+	Synthesizer research.Synthesizer
+	Lock        func(guildID, threadID string) func()
+}
+
+// ErrUnknownCommand is returned by Registry.Execute for unregistered command names.
+var ErrUnknownCommand = fmt.Errorf("unknown command")
+
+type slashCommand interface {
+	Definition() *discordgo.ApplicationCommand
+	Execute(ctx context.Context, s DiscordSession, i *discordgo.InteractionCreate) error
+}
+
+// componentFunc handles one message component interaction.
+type componentFunc func(ctx context.Context, s DiscordSession, i *discordgo.InteractionCreate)
+
+// prefixRoute routes component custom IDs sharing a prefix to one handler.
+type prefixRoute struct {
+	prefix string
+	handle componentFunc
+}
+
+// Registry is the constructed registry of the bot's commands: named slash
+// commands plus the single dispatch point for message component interactions.
+type Registry struct {
+	byName            map[string]slashCommand
+	componentRoutes   map[string]componentFunc
+	componentPrefixes []prefixRoute
+	defs              []*discordgo.ApplicationCommand
+}
+
+// New builds the command registry; it is the single place listing the bot's commands.
+func New(d Deps) *Registry {
+	listCharacters := &listCharactersCmd{session: d.Session, imageClient: d.ImageClient}
+	setCharacter := &setCharacterCmd{session: d.Session, imageClient: d.ImageClient, synthesizer: d.Synthesizer, audit: d.Audit}
+
+	registry := &Registry{
+		byName: make(map[string]slashCommand),
+		componentRoutes: map[string]componentFunc{
+			selectCharacterCardID: listCharacters.handleSelectCard,
+			setCharacterImageID:   setCharacter.handleImageSelection,
+		},
+		componentPrefixes: []prefixRoute{
+			{prefix: listPaginationPrefix, handle: listCharacters.handlePagination},
+		},
+	}
+	for _, cmd := range []slashCommand{
+		&resetChatCmd{session: d.Session, lock: d.Lock},
+		&statusCmd{llm: d.LLM},
+		listCharacters,
+		&setAvatarCmd{session: d.Session, imageClient: d.ImageClient},
+		setCharacter,
+	} {
+		def := cmd.Definition()
+		registry.byName[def.Name] = cmd
+		registry.defs = append(registry.defs, def)
+	}
+	return registry
+}
+
+// Definitions returns all slash command definitions for Discord registration.
+func (r *Registry) Definitions() []*discordgo.ApplicationCommand { return r.defs }
+
+// Execute dispatches a slash command interaction by name.
+func (r *Registry) Execute(ctx context.Context, name string, s DiscordSession, i *discordgo.InteractionCreate) error {
+	cmd, ok := r.byName[name]
+	if !ok {
+		return fmt.Errorf("%w: %s", ErrUnknownCommand, name)
+	}
+	return cmd.Execute(ctx, s, i)
+}
+
+// HandleComponent dispatches message component interactions (buttons, select menus)
+// to the command that owns the interaction's custom ID.
+func (r *Registry) HandleComponent(ctx context.Context, s DiscordSession, i *discordgo.InteractionCreate) {
+	id := i.MessageComponentData().CustomID
+	if handle, ok := r.componentRoutes[id]; ok {
+		handle(ctx, s, i)
+		return
+	}
+	for _, route := range r.componentPrefixes {
+		if strings.HasPrefix(id, route.prefix) {
+			route.handle(ctx, s, i)
+			return
+		}
+	}
+}

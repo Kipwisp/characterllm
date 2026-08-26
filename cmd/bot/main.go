@@ -10,10 +10,15 @@ import (
 
 	"characterllm/internal/audit"
 	"characterllm/internal/config"
+	"characterllm/internal/conversation"
 	"characterllm/internal/discord"
+	"characterllm/internal/discord/commands"
+	"characterllm/internal/images"
 	"characterllm/internal/llm"
 	"characterllm/internal/logger"
 	"characterllm/internal/prompts"
+	"characterllm/internal/research"
+	"characterllm/internal/search"
 	"characterllm/internal/session"
 )
 
@@ -49,14 +54,50 @@ func main() {
 
 	// Setup Discord Handlers (Pass config for model name)
 	auditLogger := audit.NewAuditLogger("logs")
-	handlers, err := discord.NewHandlers(llmClient, sessionMgr, cfg, auditLogger, promptSet)
+
+	searchProvider, imageSearchProvider, err := search.NewProvider(cfg.Images.Provider, cfg.Images.SearXNGURL)
 	if err != nil {
-		slog.Error("failed to initialize discord handlers", "error", err)
+		slog.Error("failed to initialize search provider", "error", err)
 		os.Exit(1)
 	}
 
+	imageClient := images.NewImageClient(imageSearchProvider, cfg.Images.CacheDir)
+	if imageClient == nil {
+		slog.Error("failed to initialize image client")
+		os.Exit(1)
+	}
+
+	locks := discord.NewConversationLocks()
+
+	synthesizer := research.NewSynthesizer(searchProvider, llmClient, cfg, promptSet)
+
+	commandRegistry := commands.New(commands.Deps{
+		Session:     sessionMgr,
+		LLM:         llmClient,
+		Audit:       auditLogger,
+		ImageClient: imageClient,
+		Synthesizer: synthesizer,
+		Lock:        locks.Lock,
+	})
+
+	chat := &discord.Chat{
+		LLM:           llmClient,
+		Session:       sessionMgr,
+		Config:        cfg,
+		Audit:         auditLogger,
+		ImageClient:   imageClient,
+		PromptBuilder: conversation.NewPromptBuilder(llmClient, sessionMgr, cfg, promptSet),
+		Compactor:     conversation.NewCompactor(llmClient, sessionMgr, cfg, auditLogger, promptSet),
+		Locks:         locks,
+	}
+
+	router := &discord.Router{
+		Chat:            chat,
+		CommandRegistry: commandRegistry,
+	}
+
 	// Initialize and Start Discord Bot
-	bot, err := discord.NewBot(cfg.Discord.Token, handlers)
+	bot, err := discord.NewBot(cfg.Discord.Token, router)
 
 	if err != nil {
 		slog.Error("failed to initialize bot", "error", err)
@@ -68,6 +109,8 @@ func main() {
 		slog.Error("failed to start bot", "error", err)
 		os.Exit(1)
 	}
+
+	bot.RegisterCommands(commandRegistry.Definitions())
 
 	slog.Info("bot is now running. Press CTRL-C to exit.")
 

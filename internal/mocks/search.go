@@ -6,6 +6,24 @@ import (
 	"characterllm/internal/search"
 )
 
+// MockImageSearchProvider is a configurable test double for
+// search.ImageSearchProvider. When limit is greater than zero and smaller than
+// the number of results, only the first limit results are returned.
+type MockImageSearchProvider struct {
+	Images []search.Image
+	Err    error
+}
+
+func (m *MockImageSearchProvider) SearchImages(ctx context.Context, query string, limit int) ([]search.Image, error) {
+	if m.Err != nil {
+		return nil, m.Err
+	}
+	if limit > 0 && len(m.Images) > limit {
+		return m.Images[:limit], nil
+	}
+	return m.Images, nil
+}
+
 // MockSearchProvider is a configurable test double for search.SearchProvider.
 // When limit is greater than zero and smaller than the number of results, only
 // the first limit results are returned.

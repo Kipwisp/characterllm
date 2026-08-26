@@ -1,13 +1,18 @@
 package commands
 
 import (
-	"characterllm/internal/responses"
 	"context"
 	"fmt"
+
+	"characterllm/internal/llm"
+	"characterllm/internal/responses"
+
 	"github.com/bwmarrin/discordgo"
 )
 
-type statusCmd struct{}
+type statusCmd struct {
+	llm llm.LLMClient
+}
 
 // Definition returns the Discord application command definition for checking status.
 func (c *statusCmd) Definition() *discordgo.ApplicationCommand {
@@ -18,8 +23,8 @@ func (c *statusCmd) Definition() *discordgo.ApplicationCommand {
 }
 
 // Execute pings the LLM server and returns the latency to the user.
-func (c *statusCmd) Execute(ctx context.Context, cmdCtx CommandContext, s DiscordSession, i *discordgo.InteractionCreate) error {
-	latency, err := cmdCtx.GetLLM().Ping(ctx)
+func (c *statusCmd) Execute(ctx context.Context, s DiscordSession, i *discordgo.InteractionCreate) error {
+	latency, err := c.llm.Ping(ctx)
 	if err != nil {
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
@@ -37,8 +42,4 @@ func (c *statusCmd) Execute(ctx context.Context, cmdCtx CommandContext, s Discor
 		},
 	})
 	return nil
-}
-
-func init() {
-	Register(&statusCmd{})
 }

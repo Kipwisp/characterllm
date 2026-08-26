@@ -68,8 +68,10 @@ var (
 
 	ResetChat = struct {
 		Success string
+		Error   string
 	}{
 		Success: "Chat history reset successfully.",
+		Error:   "Sorry, I couldn't reset the chat history.",
 	}
 
 	General = struct {

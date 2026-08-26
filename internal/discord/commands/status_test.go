@@ -26,8 +26,8 @@ func TestStatusCommand_Online(t *testing.T) {
 		return expectedLatency, nil
 	}
 
-	cmd := &statusCmd{}
-	err := cmd.Execute(context.Background(), cmdCtx, s, &discordgo.InteractionCreate{
+	cmd := &statusCmd{llm: cmdCtx.LLM}
+	err := cmd.Execute(context.Background(), s, &discordgo.InteractionCreate{
 		Interaction: &discordgo.Interaction{},
 	})
 
@@ -50,8 +50,8 @@ func TestStatusCommand_Offline(t *testing.T) {
 		return 0, fmt.Errorf("connection failed")
 	}
 
-	cmd := &statusCmd{}
-	err := cmd.Execute(context.Background(), cmdCtx, s, &discordgo.InteractionCreate{
+	cmd := &statusCmd{llm: cmdCtx.LLM}
+	err := cmd.Execute(context.Background(), s, &discordgo.InteractionCreate{
 		Interaction: &discordgo.Interaction{},
 	})
 

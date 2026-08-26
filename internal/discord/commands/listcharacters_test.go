@@ -26,8 +26,8 @@ func TestListCharactersCmd_Empty(t *testing.T) {
 	}
 	i.GuildID = "guild1"
 
-	cmd := &listCharactersCmd{}
-	err := cmd.Execute(context.Background(), cmdCtx, s, i)
+	cmd := &listCharactersCmd{session: cmdCtx.Session, imageClient: cmdCtx.ImageClient}
+	err := cmd.Execute(context.Background(), s, i)
 
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
@@ -63,8 +63,8 @@ func TestListCharactersCmd_WithCharacters(t *testing.T) {
 	}
 	i.GuildID = guildID
 
-	cmd := &listCharactersCmd{}
-	err := cmd.Execute(context.Background(), cmdCtx, s, i)
+	cmd := &listCharactersCmd{session: cmdCtx.Session, imageClient: cmdCtx.ImageClient}
+	err := cmd.Execute(context.Background(), s, i)
 
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
@@ -106,7 +106,7 @@ func TestHandleSelectCharacterCard_Success(t *testing.T) {
 		return nil
 	}
 
-	HandleSelectCharacterCard(context.Background(), cmdCtx, s, i)
+	(&listCharactersCmd{session: cmdCtx.Session, imageClient: cmdCtx.ImageClient}).handleSelectCard(context.Background(), s, i)
 
 	if !respondCalled {
 		t.Error("InteractionRespond was not called")
@@ -145,8 +145,8 @@ func TestListCharactersCmd_PaginationButtons(t *testing.T) {
 	}
 	i.GuildID = guildID
 
-	cmd := &listCharactersCmd{}
-	err := cmd.Execute(context.Background(), cmdCtx, s, i)
+	cmd := &listCharactersCmd{session: cmdCtx.Session, imageClient: cmdCtx.ImageClient}
+	err := cmd.Execute(context.Background(), s, i)
 
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
@@ -198,7 +198,7 @@ func TestHandleListCharactersPagination(t *testing.T) {
 		return nil
 	}
 
-	HandleListCharactersPagination(context.Background(), cmdCtx, s, i)
+	(&listCharactersCmd{session: cmdCtx.Session, imageClient: cmdCtx.ImageClient}).handlePagination(context.Background(), s, i)
 
 	if capturedContent == "" {
 		t.Error("Expected response content for pagination, got empty string")

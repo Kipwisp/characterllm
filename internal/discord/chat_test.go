@@ -9,65 +9,31 @@ import (
 	"testing"
 	"time"
 
-	"characterllm/internal/audit"
-	"characterllm/internal/config"
+	"characterllm/internal/conversation"
 	"characterllm/internal/llm"
-	"characterllm/internal/prompts"
 	"characterllm/internal/session"
+	"characterllm/internal/testkit"
+
 	"github.com/bwmarrin/discordgo"
 )
 
-func setupHandlers(t *testing.T) (*Handlers, *mockLLMClient, *session.Manager, string) {
-	tmpDb, err := os.CreateTemp("", "session_test*.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	tmpDbName := tmpDb.Name()
-	tmpDb.Close()
+func setupChat(t *testing.T) (*Chat, *mockLLMClient, *session.Manager, string) {
+	env := testkit.NewEnv(t)
 
-	sm, err := session.NewManager(tmpDbName, "Default Prompt")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	tmpLogDir, err := os.MkdirTemp("", "audit_test*")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	llmMock := &mockLLMClient{}
-	cfg := &config.Config{
-		LLM: config.LLMConfig{
-			Model:               "gpt-4",
-			MaxContext:          4096,
-			CompactionThreshold: 0.8,
-			RecentMemoryWindow:  10,
-			SummaryMaxTokens:    1024,
-			MaxImages:         2,
-		},
-		Images: config.ImageConfig{
-			Provider:   "searxng",
-			SearXNGURL: "http://localhost:8080",
-		},
-	}
-
-	auditLogger := audit.NewAuditLogger(tmpLogDir)
-
-	ps := &prompts.Set{
-		System:     "[CHARACTER_DETAILS] is a helpful bot.[SUMMARY_CONTEXT]",
-		Compaction: "Summarize the following: [LENGTH_LIMIT]",
-	}
-
-	h, err := NewHandlers(llmMock, sm, cfg, auditLogger, ps)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	return h, llmMock, sm, tmpDbName
+	return &Chat{
+		LLM:           env.LLM,
+		Session:       env.Session,
+		Config:        env.Config,
+		Audit:         env.Audit,
+		ImageClient:   &mockImageClient{},
+		PromptBuilder: conversation.NewPromptBuilder(env.LLM, env.Session, env.Config, env.Prompts),
+		Compactor:     conversation.NewCompactor(env.LLM, env.Session, env.Config, env.Audit, env.Prompts),
+		Locks:         NewConversationLocks(),
+	}, env.LLM, env.Session, env.DBPath
 }
 
 func TestHandleMessageCreate_NoMention(t *testing.T) {
-	h, _, _, dbPath := setupHandlers(t)
+	c, _, _, dbPath := setupChat(t)
 	defer os.Remove(dbPath)
 
 	s := &mockDiscordSession{
@@ -81,11 +47,11 @@ func TestHandleMessageCreate_NoMention(t *testing.T) {
 		},
 	}
 
-	h.handleMessageCreate(s, m)
+	c.Handle(s, m)
 }
 
 func TestHandleMessageCreate_BotAuthor(t *testing.T) {
-	h, _, _, dbPath := setupHandlers(t)
+	c, _, _, dbPath := setupChat(t)
 	defer os.Remove(dbPath)
 
 	sentReply := false
@@ -104,7 +70,7 @@ func TestHandleMessageCreate_BotAuthor(t *testing.T) {
 	}
 	m.GuildID = "guild1"
 
-	h.handleMessageCreate(s, m)
+	c.Handle(s, m)
 
 	if sentReply {
 		t.Error("Should not have sent a reply to a bot")
@@ -112,7 +78,7 @@ func TestHandleMessageCreate_BotAuthor(t *testing.T) {
 }
 
 func TestHandleMessageCreate_NoCharacterSet(t *testing.T) {
-	h, _, _, dbPath := setupHandlers(t)
+	c, _, _, dbPath := setupChat(t)
 	defer os.Remove(dbPath)
 
 	sentReply := false
@@ -132,7 +98,7 @@ func TestHandleMessageCreate_NoCharacterSet(t *testing.T) {
 	}
 	m.GuildID = "guild1"
 
-	h.handleMessageCreate(s, m)
+	c.Handle(s, m)
 
 	if !sentReply {
 		t.Error("Should have sent a reply indicating no character set")
@@ -140,7 +106,7 @@ func TestHandleMessageCreate_NoCharacterSet(t *testing.T) {
 }
 
 func TestHandleMessageCreate_ReplyToBot(t *testing.T) {
-	h, llmMock, sm, dbPath := setupHandlers(t)
+	c, llmMock, sm, dbPath := setupChat(t)
 	defer os.Remove(dbPath)
 
 	ctx := context.Background()
@@ -177,7 +143,7 @@ func TestHandleMessageCreate_ReplyToBot(t *testing.T) {
 	}
 	m.GuildID = guildID
 
-	h.handleMessageCreate(s, m)
+	c.Handle(s, m)
 
 	if sentResponse != "Hello reply!" {
 		t.Errorf("Expected 'Hello reply!', got %s", sentResponse)
@@ -185,7 +151,7 @@ func TestHandleMessageCreate_ReplyToBot(t *testing.T) {
 }
 
 func TestHandleMessageCreate_VisionAttachmentForwarded(t *testing.T) {
-	h, llmMock, sm, dbPath := setupHandlers(t)
+	c, llmMock, sm, dbPath := setupChat(t)
 	defer os.Remove(dbPath)
 
 	ctx := context.Background()
@@ -197,10 +163,10 @@ func TestHandleMessageCreate_VisionAttachmentForwarded(t *testing.T) {
 		Description: "A test character",
 	}, []string{})
 	sm.SetActiveCharacter(ctx, guildID, charID)
-	h.BotConfig.LLM.Vision = true
+	c.Config.LLM.Vision = true
 
 	called := false
-	h.imageClient = &mockImageClient{
+	c.ImageClient = &mockImageClient{
 		ImageToDataURIFn: func(ctx context.Context, url string) (string, error) {
 			called = true
 			if url != "https://cdn.discordapp.com/att/1.png" {
@@ -235,7 +201,7 @@ func TestHandleMessageCreate_VisionAttachmentForwarded(t *testing.T) {
 	}
 	m.GuildID = guildID
 
-	h.handleMessageCreate(s, m)
+	c.Handle(s, m)
 
 	if !called {
 		t.Fatal("expected the image client to be called")
@@ -247,7 +213,7 @@ func TestHandleMessageCreate_VisionAttachmentForwarded(t *testing.T) {
 }
 
 func TestHandleMessageCreate_ImageNotesStrippedAndPersisted(t *testing.T) {
-	h, llmMock, sm, dbPath := setupHandlers(t)
+	c, llmMock, sm, dbPath := setupChat(t)
 	defer os.Remove(dbPath)
 
 	ctx := context.Background()
@@ -259,9 +225,9 @@ func TestHandleMessageCreate_ImageNotesStrippedAndPersisted(t *testing.T) {
 		Description: "A test character",
 	}, []string{})
 	sm.SetActiveCharacter(ctx, guildID, charID)
-	h.BotConfig.LLM.Vision = true
+	c.Config.LLM.Vision = true
 
-	h.imageClient = &mockImageClient{
+	c.ImageClient = &mockImageClient{
 		ImageToDataURIFn: func(ctx context.Context, url string) (string, error) {
 			return "data:image/jpeg;base64,abc", nil
 		},
@@ -291,7 +257,7 @@ func TestHandleMessageCreate_ImageNotesStrippedAndPersisted(t *testing.T) {
 	}
 	m.GuildID = guildID
 
-	h.handleMessageCreate(s, m)
+	c.Handle(s, m)
 
 	if sentContent != "Nice shot!" {
 		t.Errorf("expected image note stripped from the sent message, got %q", sentContent)
@@ -319,7 +285,7 @@ func TestHandleMessageCreate_ImageNotesStrippedAndPersisted(t *testing.T) {
 }
 
 func TestHandleMessageCreate_MaxImagesCapsForwardedAttachments(t *testing.T) {
-	h, llmMock, sm, dbPath := setupHandlers(t)
+	c, llmMock, sm, dbPath := setupChat(t)
 	defer os.Remove(dbPath)
 
 	ctx := context.Background()
@@ -331,10 +297,10 @@ func TestHandleMessageCreate_MaxImagesCapsForwardedAttachments(t *testing.T) {
 		Description: "A test character",
 	}, []string{})
 	sm.SetActiveCharacter(ctx, guildID, charID)
-	h.BotConfig.LLM.Vision = true
+	c.Config.LLM.Vision = true
 
 	var fetched []string
-	h.imageClient = &mockImageClient{
+	c.ImageClient = &mockImageClient{
 		ImageToDataURIFn: func(ctx context.Context, url string) (string, error) {
 			fetched = append(fetched, url)
 			return "data:image/jpeg;base64,abc", nil
@@ -351,7 +317,7 @@ func TestHandleMessageCreate_MaxImagesCapsForwardedAttachments(t *testing.T) {
 	}
 
 	t.Run("cap 2 of 3 attachments", func(t *testing.T) {
-		h.BotConfig.LLM.MaxImages = 2
+		c.Config.LLM.MaxImages = 2
 		fetched = nil
 
 		m := &discordgo.MessageCreate{
@@ -367,7 +333,7 @@ func TestHandleMessageCreate_MaxImagesCapsForwardedAttachments(t *testing.T) {
 		}
 		m.GuildID = guildID
 
-		h.handleMessageCreate(s, m)
+		c.Handle(s, m)
 
 		if len(fetched) != 2 || fetched[0] != "https://cdn.discordapp.com/att/1.png" || fetched[1] != "https://cdn.discordapp.com/att/2.png" {
 			t.Errorf("expected the first two attachments forwarded, got %v", fetched)
@@ -375,7 +341,7 @@ func TestHandleMessageCreate_MaxImagesCapsForwardedAttachments(t *testing.T) {
 	})
 
 	t.Run("cap 0 forwards nothing", func(t *testing.T) {
-		h.BotConfig.LLM.MaxImages = 0
+		c.Config.LLM.MaxImages = 0
 		fetched = nil
 
 		m := &discordgo.MessageCreate{
@@ -389,7 +355,7 @@ func TestHandleMessageCreate_MaxImagesCapsForwardedAttachments(t *testing.T) {
 		}
 		m.GuildID = guildID
 
-		h.handleMessageCreate(s, m)
+		c.Handle(s, m)
 
 		if len(fetched) != 0 {
 			t.Errorf("expected no attachments forwarded, got %v", fetched)
@@ -398,7 +364,7 @@ func TestHandleMessageCreate_MaxImagesCapsForwardedAttachments(t *testing.T) {
 }
 
 func TestHandleMessageCreate_VisionDisabledIgnoresAttachments(t *testing.T) {
-	h, llmMock, sm, dbPath := setupHandlers(t)
+	c, llmMock, sm, dbPath := setupChat(t)
 	defer os.Remove(dbPath)
 
 	ctx := context.Background()
@@ -410,10 +376,10 @@ func TestHandleMessageCreate_VisionDisabledIgnoresAttachments(t *testing.T) {
 		Description: "A test character",
 	}, []string{})
 	sm.SetActiveCharacter(ctx, guildID, charID)
-	// Vision stays false (the setupHandlers default).
+	// Vision stays false (the setupChat default).
 
 	called := false
-	h.imageClient = &mockImageClient{
+	c.ImageClient = &mockImageClient{
 		ImageToDataURIFn: func(ctx context.Context, url string) (string, error) {
 			called = true
 			return "data:image/jpeg;base64,abc", nil
@@ -444,7 +410,7 @@ func TestHandleMessageCreate_VisionDisabledIgnoresAttachments(t *testing.T) {
 	}
 	m.GuildID = guildID
 
-	h.handleMessageCreate(s, m)
+	c.Handle(s, m)
 
 	if called {
 		t.Error("image client must not be called when vision is disabled")
@@ -456,7 +422,7 @@ func TestHandleMessageCreate_VisionDisabledIgnoresAttachments(t *testing.T) {
 }
 
 func TestHandleMessageCreate_MemberNickname(t *testing.T) {
-	h, llmMock, sm, dbPath := setupHandlers(t)
+	c, llmMock, sm, dbPath := setupChat(t)
 	defer os.Remove(dbPath)
 
 	ctx := context.Background()
@@ -491,7 +457,7 @@ func TestHandleMessageCreate_MemberNickname(t *testing.T) {
 	}
 	m.GuildID = guildID
 
-	h.handleMessageCreate(s, m)
+	c.Handle(s, m)
 
 	found := false
 	for _, msg := range capturedMessages {
@@ -506,7 +472,7 @@ func TestHandleMessageCreate_MemberNickname(t *testing.T) {
 }
 
 func TestHandleMessageCreate_Success(t *testing.T) {
-	h, llmMock, sm, dbPath := setupHandlers(t)
+	c, llmMock, sm, dbPath := setupChat(t)
 	defer os.Remove(dbPath)
 
 	ctx := context.Background()
@@ -544,7 +510,7 @@ func TestHandleMessageCreate_Success(t *testing.T) {
 	}
 	m.GuildID = guildID
 
-	h.handleMessageCreate(s, m)
+	c.Handle(s, m)
 
 	if sentResponse != "Hello from LLM!" {
 		t.Errorf("Expected 'Hello from LLM!', got %s", sentResponse)
@@ -562,7 +528,7 @@ func TestHandleMessageCreate_Success(t *testing.T) {
 }
 
 func TestHandleMessageCreate_SystemPromptSubstitution(t *testing.T) {
-	h, llmMock, sm, dbPath := setupHandlers(t)
+	c, llmMock, sm, dbPath := setupChat(t)
 	defer os.Remove(dbPath)
 
 	ctx := context.Background()
@@ -596,7 +562,7 @@ func TestHandleMessageCreate_SystemPromptSubstitution(t *testing.T) {
 	}
 	m.GuildID = guildID
 
-	h.handleMessageCreate(s, m)
+	c.Handle(s, m)
 
 	found := false
 	for _, msg := range capturedMessages {
@@ -611,7 +577,7 @@ func TestHandleMessageCreate_SystemPromptSubstitution(t *testing.T) {
 }
 
 func TestHandleMessageCreate_HistoryError(t *testing.T) {
-	h, _, sm, dbPath := setupHandlers(t)
+	c, _, sm, dbPath := setupChat(t)
 	defer os.Remove(dbPath)
 
 	os.Remove(dbPath)
@@ -643,7 +609,7 @@ func TestHandleMessageCreate_HistoryError(t *testing.T) {
 	}
 	m.GuildID = guildID
 
-	h.handleMessageCreate(s, m)
+	c.Handle(s, m)
 
 	if !sentError {
 		t.Error("Should have sent an error message when history retrieval failed")
@@ -651,7 +617,7 @@ func TestHandleMessageCreate_HistoryError(t *testing.T) {
 }
 
 func TestProcessChat_Error(t *testing.T) {
-	h, llmMock, _, dbPath := setupHandlers(t)
+	c, llmMock, _, dbPath := setupChat(t)
 	defer os.Remove(dbPath)
 
 	sentError := false
@@ -674,7 +640,7 @@ func TestProcessChat_Error(t *testing.T) {
 	}
 	m.GuildID = "guild1"
 
-	err := h.processChat(context.Background(), s, m, "char1", "prompt", []llm.Message{}, "req1")
+	err := c.processChat(context.Background(), s, m, "char1", "prompt", []llm.Message{}, "req1")
 
 	if err == nil {
 		t.Error("Expected error, got nil")
@@ -689,7 +655,7 @@ func TestProcessChat_Error(t *testing.T) {
 // after the reply. The compaction and prompt-assembly logic itself is covered
 // by the tests in internal/conversation.
 func TestHandleMessageCreate_SerializesSameConversation(t *testing.T) {
-	h, llmMock, sm, dbPath := setupHandlers(t)
+	c, llmMock, sm, dbPath := setupChat(t)
 	defer os.Remove(dbPath)
 
 	ctx := context.Background()
@@ -743,11 +709,11 @@ func TestHandleMessageCreate_SerializesSameConversation(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(2)
-	go func() { defer wg.Done(); h.handleMessageCreate(s, m1) }()
+	go func() { defer wg.Done(); c.Handle(s, m1) }()
 
 	<-firstCallReached // turn 1 is blocked in the LLM call while holding the lock
 
-	go func() { defer wg.Done(); h.handleMessageCreate(s, m2) }()
+	go func() { defer wg.Done(); c.Handle(s, m2) }()
 	close(release)
 	wg.Wait()
 
@@ -790,7 +756,7 @@ func TestHandleMessageCreate_SerializesSameConversation(t *testing.T) {
 }
 
 func TestHandleMessageCreate_ParallelAcrossConversations(t *testing.T) {
-	h, llmMock, sm, dbPath := setupHandlers(t)
+	c, llmMock, sm, dbPath := setupChat(t)
 	defer os.Remove(dbPath)
 
 	ctx := context.Background()
@@ -839,8 +805,8 @@ func TestHandleMessageCreate_ParallelAcrossConversations(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(2)
-	go func() { defer wg.Done(); h.handleMessageCreate(s, mA) }()
-	go func() { defer wg.Done(); h.handleMessageCreate(s, mB) }()
+	go func() { defer wg.Done(); c.Handle(s, mA) }()
+	go func() { defer wg.Done(); c.Handle(s, mB) }()
 
 	// One conversation must complete while the first LLM call holds its
 	// conversation lock: the lock is per-conversation, not global.
@@ -869,7 +835,7 @@ func TestHandleMessageCreate_ParallelAcrossConversations(t *testing.T) {
 }
 
 func TestCompaction_TriggeredThroughHandler(t *testing.T) {
-	h, llmMock, sm, dbPath := setupHandlers(t)
+	c, llmMock, sm, dbPath := setupChat(t)
 	defer os.Remove(dbPath)
 
 	ctx := context.Background()
@@ -882,10 +848,10 @@ func TestCompaction_TriggeredThroughHandler(t *testing.T) {
 	}, []string{})
 	sm.SetActiveCharacter(ctx, guildID, charID)
 
-	h.BotConfig.LLM.CompactionThreshold = 0.1
-	h.BotConfig.LLM.MaxContext = 1000
-	h.BotConfig.LLM.RecentMemoryWindow = 2
-	h.BotConfig.LLM.SummaryMaxTokens = 20
+	c.Config.LLM.CompactionThreshold = 0.1
+	c.Config.LLM.MaxContext = 1000
+	c.Config.LLM.RecentMemoryWindow = 2
+	c.Config.LLM.SummaryMaxTokens = 20
 
 	llmMock.EstimateTokensFn = func(ctx context.Context, messages []llm.Message) int {
 		return len(messages) * 20
@@ -919,7 +885,7 @@ func TestCompaction_TriggeredThroughHandler(t *testing.T) {
 		},
 	}
 
-	h.handleMessageCreate(s, m)
+	c.Handle(s, m)
 
 	if compactionCalls != 1 {
 		t.Errorf("Expected exactly 1 compaction generation call, got %d", compactionCalls)

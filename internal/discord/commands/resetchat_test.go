@@ -27,8 +27,8 @@ func TestResetChatCmd_Execute(t *testing.T) {
 		return nil
 	}
 
-	cmd := &resetChatCmd{}
-	err := cmd.Execute(context.Background(), cmdCtx, s, i)
+	cmd := &resetChatCmd{session: cmdCtx.Session, lock: func(string, string) func() { return func() {} }}
+	err := cmd.Execute(context.Background(), s, i)
 
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)

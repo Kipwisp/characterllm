@@ -6,8 +6,10 @@ import (
 	"os"
 	"strings"
 
+	"characterllm/internal/images"
 	"characterllm/internal/logger"
 	"characterllm/internal/responses"
+	"characterllm/internal/session"
 
 	"github.com/bwmarrin/discordgo"
 )
@@ -15,7 +17,10 @@ import (
 // maxAvatarBytes mirrors Discord's 10 MB avatar upload limit.
 const maxAvatarBytes = 10 << 20 // 10 MiB
 
-type setAvatarCmd struct{}
+type setAvatarCmd struct {
+	session     *session.Manager
+	imageClient images.ImageClient
+}
 
 // Definition returns the Discord application command definition for setting the bot avatar.
 func (c *setAvatarCmd) Definition() *discordgo.ApplicationCommand {
@@ -35,8 +40,8 @@ func (c *setAvatarCmd) Definition() *discordgo.ApplicationCommand {
 
 // Execute downloads the attached image into the local cache (the source of
 // truth for the character's avatar) and sets it as the bot's guild avatar.
-func (c *setAvatarCmd) Execute(ctx context.Context, cmdCtx CommandContext, s DiscordSession, i *discordgo.InteractionCreate) error {
-	details, err := cmdCtx.GetSession().GetCharacterDetails(ctx, i.GuildID)
+func (c *setAvatarCmd) Execute(ctx context.Context, s DiscordSession, i *discordgo.InteractionCreate) error {
+	details, err := c.session.GetCharacterDetails(ctx, i.GuildID)
 	if err != nil || details == nil || details.CharacterID == "" {
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
@@ -61,9 +66,8 @@ func (c *setAvatarCmd) Execute(ctx context.Context, cmdCtx CommandContext, s Dis
 		return fmt.Errorf("no image source provided")
 	}
 
-	imgClient := cmdCtx.GetImageClient()
-	if imgClient == nil {
-		logger.FromContext(ctx).Error("no image client available in context")
+	if c.imageClient == nil {
+		logger.FromContext(ctx).Error("no image client available")
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
@@ -73,7 +77,7 @@ func (c *setAvatarCmd) Execute(ctx context.Context, cmdCtx CommandContext, s Dis
 		return fmt.Errorf("no image client available")
 	}
 
-	path, err := imgClient.SaveImage(ctx, i.GuildID, details.CharacterID, sourceURL)
+	path, err := c.imageClient.SaveImage(ctx, i.GuildID, details.CharacterID, sourceURL)
 	if err != nil {
 		logger.FromContext(ctx).Error("failed to download avatar image", "error", err, "guild_id", i.GuildID)
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
@@ -95,8 +99,8 @@ func (c *setAvatarCmd) Execute(ctx context.Context, cmdCtx CommandContext, s Dis
 		return fmt.Errorf("avatar image exceeds %d bytes", maxAvatarBytes)
 	}
 
-	// clear image_url since we are using an user uploaded image now
-	if err := cmdCtx.GetSession().SetCharacterImage(ctx, i.GuildID, details.CharacterID, ""); err != nil {
+	// clear image_url since we are using a user uploaded image now
+	if err := c.session.SetCharacterImage(ctx, i.GuildID, details.CharacterID, ""); err != nil {
 		logger.FromContext(ctx).Error("failed to clear character image url", "error", err, "guild_id", i.GuildID, "character_id", details.CharacterID)
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
@@ -107,7 +111,7 @@ func (c *setAvatarCmd) Execute(ctx context.Context, cmdCtx CommandContext, s Dis
 		return err
 	}
 
-	dataURI, err := imgClient.ImageToBase64(ctx, path)
+	dataURI, err := c.imageClient.ImageToBase64(ctx, path)
 	if err != nil {
 		logger.FromContext(ctx).Error("failed to encode avatar image", "error", err)
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
@@ -174,8 +178,4 @@ func firstImageAttachment(i *discordgo.InteractionCreate) string {
 		}
 	}
 	return ""
-}
-
-func init() {
-	Register(&setAvatarCmd{})
 }

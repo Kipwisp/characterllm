@@ -38,7 +38,8 @@ type mockImageClient = mocks.MockImageClient
 
 type mockDiscordSession = mocks.MockDiscordSession
 
-type mockCommandContext struct {
+// testDeps holds the raw dependencies used to construct commands directly in tests.
+type testDeps struct {
 	Session     *session.Manager
 	LLM         llm.LLMClient
 	Config      *config.Config
@@ -47,18 +48,4 @@ type mockCommandContext struct {
 	ImageSearch search.ImageSearchProvider
 	Synthesizer research.Synthesizer
 	ImageClient images.ImageClient
-}
-
-func (m *mockCommandContext) GetSession() *session.Manager             { return m.Session }
-func (m *mockCommandContext) GetLLM() llm.LLMClient                    { return m.LLM }
-func (m *mockCommandContext) GetConfig() *config.Config                { return m.Config }
-func (m *mockCommandContext) GetAudit() *audit.AuditLogger             { return m.Audit }
-func (m *mockCommandContext) GetSearchProvider() search.SearchProvider { return m.Search }
-func (m *mockCommandContext) GetImageSearchProvider() search.ImageSearchProvider {
-	return m.ImageSearch
-}
-func (m *mockCommandContext) GetSynthesizer() research.Synthesizer { return m.Synthesizer }
-func (m *mockCommandContext) GetImageClient() images.ImageClient   { return m.ImageClient }
-func (m *mockCommandContext) LockConversation(guildID, threadID string) func() {
-	return func() {}
 }

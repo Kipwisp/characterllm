@@ -7,7 +7,10 @@ import (
 	"strings"
 	"time"
 
+	"characterllm/internal/audit"
+	"characterllm/internal/images"
 	"characterllm/internal/logger"
+	"characterllm/internal/research"
 	"characterllm/internal/responses"
 	"characterllm/internal/session"
 	"characterllm/internal/utils"
@@ -16,7 +19,12 @@ import (
 	"github.com/google/uuid"
 )
 
-type setCharacterCmd struct{}
+type setCharacterCmd struct {
+	session     *session.Manager
+	imageClient images.ImageClient
+	synthesizer research.Synthesizer
+	audit       *audit.AuditLogger
+}
 
 // Definition returns the Discord application command definition for setting the character persona.
 func (c *setCharacterCmd) Definition() *discordgo.ApplicationCommand {
@@ -35,7 +43,7 @@ func (c *setCharacterCmd) Definition() *discordgo.ApplicationCommand {
 }
 
 // Execute handles the process of searching for a character and setting their persona.
-func (c *setCharacterCmd) Execute(ctx context.Context, cmdCtx CommandContext, s DiscordSession, i *discordgo.InteractionCreate) error {
+func (c *setCharacterCmd) Execute(ctx context.Context, s DiscordSession, i *discordgo.InteractionCreate) error {
 	userInput, err := c.parsePromptOption(s, i)
 	if err != nil {
 		return err
@@ -48,16 +56,16 @@ func (c *setCharacterCmd) Execute(ctx context.Context, cmdCtx CommandContext, s 
 		},
 	})
 
-	card, err := c.fetchAndSetupCharacter(ctx, cmdCtx, s, i, userInput)
+	card, err := c.fetchAndSetupCharacter(ctx, s, i, userInput)
 	if err != nil {
 		return err
 	}
 
-	if err := ApplyCharacterAvatar(ctx, cmdCtx, s, i.GuildID, card.CharacterID, card.ImageURL); err != nil {
+	if err := ApplyCharacterAvatar(ctx, c.imageClient, s, i.GuildID, card.CharacterID, card.ImageURL); err != nil {
 		logger.FromContext(ctx).Warn("failed to apply character avatar", "error", err, "guild_id", i.GuildID)
 	}
 
-	return c.searchAndProcessImages(ctx, cmdCtx, s, i, card)
+	return c.searchAndProcessImages(ctx, s, i, card)
 }
 
 func (c *setCharacterCmd) parsePromptOption(s DiscordSession, i *discordgo.InteractionCreate) (string, error) {
@@ -80,13 +88,13 @@ func (c *setCharacterCmd) parsePromptOption(s DiscordSession, i *discordgo.Inter
 	return opt.StringValue(), nil
 }
 
-func (c *setCharacterCmd) fetchAndSetupCharacter(ctx context.Context, cmdCtx CommandContext, s DiscordSession, i *discordgo.InteractionCreate, userInput string) (*session.CharacterCard, error) {
+func (c *setCharacterCmd) fetchAndSetupCharacter(ctx context.Context, s DiscordSession, i *discordgo.InteractionCreate, userInput string) (*session.CharacterCard, error) {
 	// 1. Resolve Alias First (Fast Path)
-	if card, err := cmdCtx.GetSession().GetCardByAlias(ctx, i.GuildID, userInput); err == nil && card != nil {
+	if card, err := c.session.GetCardByAlias(ctx, i.GuildID, userInput); err == nil && card != nil {
 		logger.FromContext(ctx).Info("found character by alias", "alias", userInput, "name", card.DisplayName)
 
 		// Finalize setup for cached card
-		if err := cmdCtx.GetSession().SetActiveCharacter(ctx, i.GuildID, card.CharacterID); err != nil {
+		if err := c.session.SetActiveCharacter(ctx, i.GuildID, card.CharacterID); err != nil {
 			logger.FromContext(ctx).Error("failed to save system prompt", "error", err, "guild_id", i.GuildID)
 		}
 		if err := s.GuildMemberNickname(i.GuildID, "@me", card.DisplayName); err != nil {
@@ -99,7 +107,7 @@ func (c *setCharacterCmd) fetchAndSetupCharacter(ctx context.Context, cmdCtx Com
 	}
 
 	// 2. Analyze Input (Intent, Modifier, Injection, Nonsense)
-	synth := cmdCtx.GetSynthesizer()
+	synth := c.synthesizer
 
 	startAnalysis := time.Now()
 	analysis, rawResponse, analysisReasoning, err := synth.AnalyzeInput(ctx, userInput)
@@ -118,7 +126,7 @@ func (c *setCharacterCmd) fetchAndSetupCharacter(ctx context.Context, cmdCtx Com
 	if analysis.Status == "OK" {
 		characterID = utils.CreateCharacterSlug(analysis.OfficialName, analysis.Modifiers, analysis.ScenarioID)
 	}
-	cmdCtx.GetAudit().LogConversation(ctx, i.GuildID, characterID, fmt.Sprintf("Analyze Input: %s", userInput), analysisReasoning, rawResponse, nil, analysisLatency, uuid.New().String())
+	c.audit.LogConversation(ctx, i.GuildID, characterID, fmt.Sprintf("Analyze Input: %s", userInput), analysisReasoning, rawResponse, nil, analysisLatency, uuid.New().String())
 
 	// 3. Handle Analysis Status
 	switch analysis.Status {
@@ -156,7 +164,7 @@ func (c *setCharacterCmd) fetchAndSetupCharacter(ctx context.Context, cmdCtx Com
 
 	// Log the synthesis to the conversation audit trail
 	logPrompt := fmt.Sprintf("Request: %s\n\nResearch Dossier:\n%s", userInput, res.ResearchData)
-	cmdCtx.GetAudit().LogConversation(ctx, i.GuildID, characterID, logPrompt, res.Reasoning, res.PersonaSpec, nil, latency, uuid.New().String())
+	c.audit.LogConversation(ctx, i.GuildID, characterID, logPrompt, res.Reasoning, res.PersonaSpec, nil, latency, uuid.New().String())
 
 	// 5. Handle Synthesis Status
 	switch res.Status {
@@ -177,7 +185,7 @@ func (c *setCharacterCmd) fetchAndSetupCharacter(ctx context.Context, cmdCtx Com
 	}
 
 	// 6. Canonical Check (Guild-Specific)
-	card, err := cmdCtx.GetSession().GetCharacterCard(ctx, i.GuildID, characterID)
+	card, err := c.session.GetCharacterCard(ctx, i.GuildID, characterID)
 	if err != nil {
 		return nil, err
 	}
@@ -199,14 +207,14 @@ func (c *setCharacterCmd) fetchAndSetupCharacter(ctx context.Context, cmdCtx Com
 			Scenario:     analysis.Scenario,
 		}
 
-		if err := cmdCtx.GetSession().SaveCharacterCard(ctx, i.GuildID, newCard, analysis.Aliases); err != nil {
+		if err := c.session.SaveCharacterCard(ctx, i.GuildID, newCard, analysis.Aliases); err != nil {
 			logger.FromContext(ctx).Error("failed to save canonical character card", "error", err, "characterID", characterID)
 		}
 		finalCard = newCard
 	}
 
 	// Finalize setup: save prompt and update nickname immediately
-	if err := cmdCtx.GetSession().SetActiveCharacter(ctx, i.GuildID, finalCard.CharacterID); err != nil {
+	if err := c.session.SetActiveCharacter(ctx, i.GuildID, finalCard.CharacterID); err != nil {
 		logger.FromContext(ctx).Error("failed to save system prompt", "error", err, "guild_id", i.GuildID)
 	}
 	if err := s.GuildMemberNickname(i.GuildID, "@me", finalCard.DisplayName); err != nil {
@@ -216,13 +224,12 @@ func (c *setCharacterCmd) fetchAndSetupCharacter(ctx context.Context, cmdCtx Com
 	return finalCard, nil
 }
 
-func (c *setCharacterCmd) searchAndProcessImages(ctx context.Context, cmdCtx CommandContext, s DiscordSession, i *discordgo.InteractionCreate, card *session.CharacterCard) error {
-	imgClient := cmdCtx.GetImageClient()
-	if imgClient == nil {
-		logger.FromContext(ctx).Error("no image client available in context")
+func (c *setCharacterCmd) searchAndProcessImages(ctx context.Context, s DiscordSession, i *discordgo.InteractionCreate, card *session.CharacterCard) error {
+	if c.imageClient == nil {
+		logger.FromContext(ctx).Error("no image client available")
 		return fmt.Errorf("no image client available")
 	}
-	imgResults, err := imgClient.SearchImages(ctx, fmt.Sprintf("%s profile picture", card.DisplayName), 5)
+	imgResults, err := c.imageClient.SearchImages(ctx, fmt.Sprintf("%s profile picture", card.DisplayName), 5)
 	if err != nil {
 		logger.FromContext(ctx).Warn("image search failed", "error", err)
 		_, errEdit := s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
@@ -268,8 +275,8 @@ func (c *setCharacterCmd) searchAndProcessImages(ctx context.Context, cmdCtx Com
 		})
 	}
 
-	// Save candidates to session to retrieve them in ComponentCreate
-	if err := cmdCtx.GetSession().SaveImageCandidates(ctx, i.GuildID, urls); err != nil {
+	// Save candidates to session to retrieve them in HandleComponent
+	if err := c.session.SaveImageCandidates(ctx, i.GuildID, urls); err != nil {
 		logger.FromContext(ctx).Error("failed to save image candidates", "error", err, "guild_id", i.GuildID)
 	}
 
@@ -277,7 +284,7 @@ func (c *setCharacterCmd) searchAndProcessImages(ctx context.Context, cmdCtx Com
 		discordgo.ActionsRow{
 			Components: []discordgo.MessageComponent{
 				discordgo.SelectMenu{
-					CustomID: "select_char_image",
+					CustomID: setCharacterImageID,
 					Options:  options,
 				},
 			},
@@ -296,8 +303,8 @@ func (c *setCharacterCmd) searchAndProcessImages(ctx context.Context, cmdCtx Com
 	return nil
 }
 
-// HandleSetCharacterImage processes the user's selection of a profile picture for the character.
-func HandleSetCharacterImage(ctx context.Context, cmdCtx CommandContext, s DiscordSession, i *discordgo.InteractionCreate) {
+// handleImageSelection processes the user's selection of a profile picture for the character.
+func (c *setCharacterCmd) handleImageSelection(ctx context.Context, s DiscordSession, i *discordgo.InteractionCreate) {
 	if len(i.MessageComponentData().Values) == 0 {
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
@@ -309,7 +316,7 @@ func HandleSetCharacterImage(ctx context.Context, cmdCtx CommandContext, s Disco
 	}
 
 	// Retrieve candidate images from session
-	candidates, err := cmdCtx.GetSession().GetImageCandidates(ctx, i.GuildID)
+	candidates, err := c.session.GetImageCandidates(ctx, i.GuildID)
 	if err != nil {
 		logger.FromContext(ctx).Error("failed to retrieve image candidates", "error", err, "guild_id", i.GuildID)
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
@@ -344,7 +351,7 @@ func HandleSetCharacterImage(ctx context.Context, cmdCtx CommandContext, s Disco
 	}
 	selectedURL := candidates[idx]
 
-	details, err := cmdCtx.GetSession().GetCharacterDetails(ctx, i.GuildID)
+	details, err := c.session.GetCharacterDetails(ctx, i.GuildID)
 	if err != nil {
 		logger.FromContext(ctx).Error("failed to get active character details", "error", err, "guild_id", i.GuildID)
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
@@ -357,7 +364,7 @@ func HandleSetCharacterImage(ctx context.Context, cmdCtx CommandContext, s Disco
 	}
 
 	// Save image URL to the character card
-	if err := cmdCtx.GetSession().SetCharacterImage(ctx, i.GuildID, details.CharacterID, selectedURL); err != nil {
+	if err := c.session.SetCharacterImage(ctx, i.GuildID, details.CharacterID, selectedURL); err != nil {
 		logger.FromContext(ctx).Error("failed to save character image", "error", err, "guild_id", i.GuildID)
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
@@ -369,9 +376,8 @@ func HandleSetCharacterImage(ctx context.Context, cmdCtx CommandContext, s Disco
 	}
 
 	// Cache the image and convert to Base64
-	imgClient := cmdCtx.GetImageClient()
-	if imgClient == nil {
-		logger.FromContext(ctx).Error("no image client available in context")
+	if c.imageClient == nil {
+		logger.FromContext(ctx).Error("no image client available")
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
@@ -381,7 +387,7 @@ func HandleSetCharacterImage(ctx context.Context, cmdCtx CommandContext, s Disco
 		return
 	}
 
-	path, err := imgClient.SaveImage(ctx, i.GuildID, details.CharacterID, selectedURL)
+	path, err := c.imageClient.SaveImage(ctx, i.GuildID, details.CharacterID, selectedURL)
 	if err != nil {
 		logger.FromContext(ctx).Error("failed to cache image", "error", err, "guild_id", i.GuildID, "character_id", details.CharacterID)
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
@@ -393,7 +399,7 @@ func HandleSetCharacterImage(ctx context.Context, cmdCtx CommandContext, s Disco
 		return
 	}
 
-	dataURI, err := imgClient.ImageToBase64(ctx, path)
+	dataURI, err := c.imageClient.ImageToBase64(ctx, path)
 	if err != nil {
 		logger.FromContext(ctx).Error("error converting image to Base64", "error", err)
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
@@ -408,7 +414,7 @@ func HandleSetCharacterImage(ctx context.Context, cmdCtx CommandContext, s Disco
 	// Update guild-specific avatar
 	err = s.UpdateGuildAvatar(i.GuildID, dataURI)
 	if err != nil {
-		logger.FromContext(ctx).Error("error updating guild avatar", "error", err, "guild_id", i.GuildID)
+		logger.FromContext(ctx).Error("error updating guild avatar", "error", err)
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
@@ -419,12 +425,12 @@ func HandleSetCharacterImage(ctx context.Context, cmdCtx CommandContext, s Disco
 	}
 
 	// Clean up candidates
-	if err := cmdCtx.GetSession().ClearImageCandidates(ctx, i.GuildID); err != nil {
+	if err := c.session.ClearImageCandidates(ctx, i.GuildID); err != nil {
 		logger.FromContext(ctx).Error("failed to clear image candidates", "error", err, "guild_id", i.GuildID)
 	}
 
 	// Retrieve full character card for the final success message
-	card, err := cmdCtx.GetSession().GetCharacterCard(ctx, i.GuildID, details.CharacterID)
+	card, err := c.session.GetCharacterCard(ctx, i.GuildID, details.CharacterID)
 	if err != nil || card == nil {
 		logger.FromContext(ctx).Error("failed to get character card for success message", "error", err, "guild_id", i.GuildID)
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
@@ -458,8 +464,4 @@ func formatCharacterSetMessage(card *session.CharacterCard) string {
 		message += fmt.Sprintf("\nScenario: %s", card.Scenario)
 	}
 	return message
-}
-
-func init() {
-	Register(&setCharacterCmd{})
 }

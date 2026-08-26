@@ -3,7 +3,6 @@
 package discord
 
 import (
-	"characterllm/internal/discord/commands"
 	"log/slog"
 
 	"github.com/bwmarrin/discordgo"
@@ -11,28 +10,28 @@ import (
 
 // Bot represents the Discord bot instance.
 type Bot struct {
-	Session  *discordgo.Session
-	Handlers *Handlers
+	Session *discordgo.Session
+	Router  *Router
 }
 
-// NewBot creates a new Bot instance with the provided token and handlers.
-func NewBot(token string, handlers *Handlers) (*Bot, error) {
+// NewBot creates a new Bot instance with the provided token and event router.
+func NewBot(token string, router *Router) (*Bot, error) {
 	dg, err := discordgo.New("Bot " + token)
 	if err != nil {
 		return nil, err
 	}
 
 	return &Bot{
-		Session:  dg,
-		Handlers: handlers,
+		Session: dg,
+		Router:  router,
 	}, nil
 }
 
 // Start opens the Discord connection and registers event handlers.
 func (b *Bot) Start() error {
-	b.Session.AddHandler(b.Handlers.MessageCreate)
-	b.Session.AddHandler(b.Handlers.InteractionCreate)
-	b.Session.AddHandler(b.Handlers.ComponentCreate)
+	b.Session.AddHandler(b.Router.MessageCreate)
+	b.Session.AddHandler(b.Router.InteractionCreate)
+	b.Session.AddHandler(b.Router.ComponentCreate)
 
 	err := b.Session.Open()
 	if err != nil {
@@ -45,16 +44,11 @@ func (b *Bot) Start() error {
 		"user_id", b.Session.State.User.ID,
 	)
 
-	b.RegisterCommands()
-
 	return nil
 }
 
 // RegisterCommands registers the bot's slash commands globally.
-func (b *Bot) RegisterCommands() {
-	appCommands := commands.GetAllDefinitions()
-
-	// Register commands globally
+func (b *Bot) RegisterCommands(appCommands []*discordgo.ApplicationCommand) {
 	_, err := b.Session.ApplicationCommandBulkOverwrite(b.Session.State.User.ID, "", appCommands)
 	if err != nil {
 		slog.Error("error bulk overwriting global commands", "error", err)

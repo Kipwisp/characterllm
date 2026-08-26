@@ -73,8 +73,8 @@ func TestSetCharacterCmd_CachedAlias(t *testing.T) {
 	}
 	i.GuildID = guildID
 
-	cmd := &setCharacterCmd{}
-	err := cmd.Execute(context.Background(), cmdCtx, s, i)
+	cmd := &setCharacterCmd{session: cmdCtx.Session, imageClient: cmdCtx.ImageClient, synthesizer: cmdCtx.Synthesizer, audit: cmdCtx.Audit}
+	err := cmd.Execute(context.Background(), s, i)
 
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
@@ -172,8 +172,8 @@ func TestSetCharacterCmd_NewCharacter_Success(t *testing.T) {
 	}
 	i.GuildID = guildID
 
-	cmd := &setCharacterCmd{}
-	err := cmd.Execute(context.Background(), cmdCtx, s, i)
+	cmd := &setCharacterCmd{session: cmdCtx.Session, imageClient: cmdCtx.ImageClient, synthesizer: cmdCtx.Synthesizer, audit: cmdCtx.Audit}
+	err := cmd.Execute(context.Background(), s, i)
 
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
@@ -236,8 +236,8 @@ func TestSetCharacterCmd_AnalysisFailures(t *testing.T) {
 			}
 			i.GuildID = guildID
 
-			cmd := &setCharacterCmd{}
-			err := cmd.Execute(context.Background(), cmdCtx, s, i)
+			cmd := &setCharacterCmd{session: cmdCtx.Session, imageClient: cmdCtx.ImageClient, synthesizer: cmdCtx.Synthesizer, audit: cmdCtx.Audit}
+			err := cmd.Execute(context.Background(), s, i)
 
 			if err == nil {
 				t.Error("Expected error for analysis failure, got nil")
@@ -307,8 +307,8 @@ func TestSetCharacterCmd_SynthesisFailures(t *testing.T) {
 			}
 			i.GuildID = guildID
 
-			cmd := &setCharacterCmd{}
-			err := cmd.Execute(context.Background(), cmdCtx, s, i)
+			cmd := &setCharacterCmd{session: cmdCtx.Session, imageClient: cmdCtx.ImageClient, synthesizer: cmdCtx.Synthesizer, audit: cmdCtx.Audit}
+			err := cmd.Execute(context.Background(), s, i)
 
 			if err == nil {
 				t.Error("Expected error for synthesis failure, got nil")
@@ -397,8 +397,8 @@ func TestSetCharacterCmd_ImageSearchFailures(t *testing.T) {
 			}
 			i.GuildID = guildID
 
-			cmd := &setCharacterCmd{}
-			err := cmd.Execute(context.Background(), cmdCtx, s, i)
+			cmd := &setCharacterCmd{session: cmdCtx.Session, imageClient: cmdCtx.ImageClient, synthesizer: cmdCtx.Synthesizer, audit: cmdCtx.Audit}
+			err := cmd.Execute(context.Background(), s, i)
 
 			if err != nil && tt.name == "No Results" {
 				t.Errorf("Unexpected error for No Results: %v", err)
@@ -448,7 +448,7 @@ func TestHandleSetCharacterImage_EdgeCases(t *testing.T) {
 			}
 			i.GuildID = guildID
 
-			HandleSetCharacterImage(context.Background(), cmdCtx, s, i)
+			(&setCharacterCmd{session: cmdCtx.Session, imageClient: cmdCtx.ImageClient}).handleImageSelection(context.Background(), s, i)
 
 			if !strings.Contains(capturedContent, tt.expectedString) {
 				t.Errorf("Expected response to contain %q, got %q", tt.expectedString, capturedContent)
@@ -510,7 +510,7 @@ func TestHandleSetCharacterImage_Success(t *testing.T) {
 		},
 	}
 
-	HandleSetCharacterImage(context.Background(), cmdCtx, s, i)
+	(&setCharacterCmd{session: cmdCtx.Session, imageClient: cmdCtx.ImageClient}).handleImageSelection(context.Background(), s, i)
 
 	// Verify candidates are cleared
 	candidates, _ := sm.GetImageCandidates(context.Background(), guildID)
