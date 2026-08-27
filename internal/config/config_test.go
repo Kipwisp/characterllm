@@ -11,9 +11,9 @@ func TestLoadConfig(t *testing.T) {
 	envVars := []string{
 		"DISCORD_TOKEN", "CLIENT_ID", "MAIN_GUILD", "MAIN_CHANNEL",
 		"LLM_URL", "LLM_MODEL", "LLM_MAX_RETRIES", "LLM_MAX_CONTEXT", "LLM_COMPACTION_THRESHOLD", "LLM_RECENT_MEMORY_WINDOW", "LLM_VISION", "LLM_MAX_IMAGES",
-		"SYSTEM_PROMPT_PATH", "COMPACTION_PROMPT_PATH", "SYNTHESIS_PROMPT_PATH", "ANALYZER_PROMPT_PATH",
+		"SYSTEM_PROMPT_PATH", "COMPACTION_PROMPT_PATH", "SYNTHESIS_PROMPT_PATH", "ANALYZER_PROMPT_PATH", "EDIT_SECTION_PROMPT_PATH",
 		"IMAGE_PROVIDER", "SEARXNG_URL", "MAX_SEARCH_RESULTS", "IMAGE_CACHE_DIR",
-		"LOG_LEVEL", "TOPIC_RATE", "BIRTHDAY_HOUR",
+		"LOG_LEVEL", "TOPIC_RATE", "BIRTHDAY_HOUR", "CONVERSATION_LOG",
 	}
 
 	for _, v := range envVars {
@@ -47,6 +47,7 @@ func TestLoadConfig(t *testing.T) {
 	os.Setenv("SYSTEM_PROMPT_PATH", "test/sys.md")
 	os.Setenv("COMPACTION_PROMPT_PATH", "test/comp.md")
 	os.Setenv("SYNTHESIS_PROMPT_PATH", "test/synth.md")
+	os.Setenv("EDIT_SECTION_PROMPT_PATH", "test/edit.md")
 	os.Setenv("ANALYZER_PROMPT_PATH", "test/anal.md")
 	os.Setenv("IMAGE_PROVIDER", "test-provider")
 	os.Setenv("SEARXNG_URL", "http://test-searxng")
@@ -55,6 +56,7 @@ func TestLoadConfig(t *testing.T) {
 	os.Setenv("LOG_LEVEL", "DEBUG")
 	os.Setenv("TOPIC_RATE", "5000")
 	os.Setenv("BIRTHDAY_HOUR", "8")
+	os.Setenv("CONVERSATION_LOG", "false")
 
 	cfg := LoadConfig()
 
@@ -106,6 +108,9 @@ func TestLoadConfig(t *testing.T) {
 	if cfg.Prompts.AnalyzerPath != "test/anal.md" {
 		t.Errorf("Expected ANALYZER_PROMPT_PATH test/anal.md, got %s", cfg.Prompts.AnalyzerPath)
 	}
+	if cfg.Prompts.EditSectionPath != "test/edit.md" {
+		t.Errorf("Expected EDIT_SECTION_PROMPT_PATH test/edit.md, got %s", cfg.Prompts.EditSectionPath)
+	}
 	if cfg.Images.Provider != "test-provider" {
 		t.Errorf("Expected IMAGE_PROVIDER test-provider, got %s", cfg.Images.Provider)
 	}
@@ -127,6 +132,9 @@ func TestLoadConfig(t *testing.T) {
 	if cfg.General.BirthdayHour != "8" {
 		t.Errorf("Expected BIRTHDAY_HOUR 8, got %s", cfg.General.BirthdayHour)
 	}
+	if cfg.General.ConversationLog {
+		t.Error("Expected CONVERSATION_LOG false")
+	}
 }
 
 func TestLoadConfigDefaults(t *testing.T) {
@@ -134,9 +142,9 @@ func TestLoadConfigDefaults(t *testing.T) {
 	envVars := []string{
 		"DISCORD_TOKEN", "CLIENT_ID", "MAIN_GUILD", "MAIN_CHANNEL",
 		"LLM_URL", "LLM_MODEL", "LLM_MAX_RETRIES", "LLM_MAX_CONTEXT", "LLM_COMPACTION_THRESHOLD", "LLM_RECENT_MEMORY_WINDOW", "LLM_VISION", "LLM_MAX_IMAGES",
-		"SYSTEM_PROMPT_PATH", "COMPACTION_PROMPT_PATH", "SYNTHESIS_PROMPT_PATH", "ANALYZER_PROMPT_PATH",
+		"SYSTEM_PROMPT_PATH", "COMPACTION_PROMPT_PATH", "SYNTHESIS_PROMPT_PATH", "ANALYZER_PROMPT_PATH", "EDIT_SECTION_PROMPT_PATH",
 		"IMAGE_PROVIDER", "SEARXNG_URL", "MAX_SEARCH_RESULTS", "IMAGE_CACHE_DIR",
-		"LOG_LEVEL", "TOPIC_RATE", "BIRTHDAY_HOUR",
+		"LOG_LEVEL", "TOPIC_RATE", "BIRTHDAY_HOUR", "CONVERSATION_LOG",
 	}
 
 	originalEnv := make(map[string]string)
@@ -196,5 +204,8 @@ func TestLoadConfigDefaults(t *testing.T) {
 	}
 	if cfg.General.LogLevel != "INFO" {
 		t.Errorf("Expected default LOG_LEVEL INFO, got %s", cfg.General.LogLevel)
+	}
+	if !cfg.General.ConversationLog {
+		t.Error("Expected default CONVERSATION_LOG true")
 	}
 }

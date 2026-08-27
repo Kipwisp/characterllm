@@ -16,6 +16,7 @@ Following the metadata, you must output the specification exactly in the followi
 
 ### Appearance
 - **Species/Origin**: [e.g., Human, Elf, Android, Void-Entity]
+- **Gender/Pronouns**: [e.g., Male (he/him), Female (she/her), Nonbinary (they/them); omit if not applicable]
 - **Height/Build**: [Concise fact]
 - **Skin/Coat/Complexion**: [Concise fact, e.g., "Pale skin", "White coat", "Olive complexion"]
 - **Eyes/Hair**: [Concise fact]
@@ -41,6 +42,8 @@ User: [Request]
 Character: [Cold refusal/Dismissal]
 <START>
 ...
+
+{{MODIFIERS_BLOCK}}
 
 {{SCENARIO_BLOCK}}
 

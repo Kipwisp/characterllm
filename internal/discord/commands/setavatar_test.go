@@ -62,7 +62,7 @@ func TestSetAvatarCmd(t *testing.T) {
 		cmdCtx, s, dbPath := setupCommandTest(t)
 		defer os.Remove(dbPath)
 
-		cmdCtx.Session.SaveCharacterCard(context.Background(), guildID, &session.CharacterCard{CharacterID: charID, DisplayName: "C"}, nil)
+		cmdCtx.Session.SaveCharacterCard(context.Background(), guildID, &session.CharacterCard{CharacterID: charID, DisplayName: "C"})
 		cmdCtx.Session.SetActiveCharacter(context.Background(), guildID, charID)
 
 		var content string
@@ -84,7 +84,7 @@ func TestSetAvatarCmd(t *testing.T) {
 		cmdCtx, s, dbPath := setupCommandTest(t)
 		defer os.Remove(dbPath)
 
-		cmdCtx.Session.SaveCharacterCard(context.Background(), guildID, &session.CharacterCard{CharacterID: charID, DisplayName: "C"}, nil)
+		cmdCtx.Session.SaveCharacterCard(context.Background(), guildID, &session.CharacterCard{CharacterID: charID, DisplayName: "C"})
 		cmdCtx.Session.SetActiveCharacter(context.Background(), guildID, charID)
 
 		tmpImg, _ := os.CreateTemp("", "setavatar_test*.png")
@@ -145,7 +145,7 @@ func TestSetAvatarCmd(t *testing.T) {
 		cmdCtx, s, dbPath := setupCommandTest(t)
 		defer os.Remove(dbPath)
 
-		cmdCtx.Session.SaveCharacterCard(context.Background(), guildID, &session.CharacterCard{CharacterID: charID, DisplayName: "C"}, nil)
+		cmdCtx.Session.SaveCharacterCard(context.Background(), guildID, &session.CharacterCard{CharacterID: charID, DisplayName: "C"})
 		cmdCtx.Session.SetActiveCharacter(context.Background(), guildID, charID)
 
 		tmpImg, _ := os.CreateTemp("", "setavatar_test*.png")
@@ -188,7 +188,7 @@ func TestSetAvatarCmd(t *testing.T) {
 		cmdCtx, s, dbPath := setupCommandTest(t)
 		defer os.Remove(dbPath)
 
-		cmdCtx.Session.SaveCharacterCard(context.Background(), guildID, &session.CharacterCard{CharacterID: charID, DisplayName: "C"}, nil)
+		cmdCtx.Session.SaveCharacterCard(context.Background(), guildID, &session.CharacterCard{CharacterID: charID, DisplayName: "C"})
 		cmdCtx.Session.SetActiveCharacter(context.Background(), guildID, charID)
 
 		bigImg, _ := os.CreateTemp("", "setavatar_test_big*.png")

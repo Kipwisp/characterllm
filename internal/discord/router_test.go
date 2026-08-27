@@ -108,39 +108,6 @@ func TestInteractionCreate_IgnoresNonSlashTypes(t *testing.T) {
 	}
 }
 
-func TestComponentCreate_RoutesSelectCard(t *testing.T) {
-	r, s, sm, dbPath := setupRouter(t, &mockLLMClient{})
-	defer os.Remove(dbPath)
-
-	sm.SaveCharacterCard(context.Background(), "guild1", &session.CharacterCard{
-		CharacterID: "char1",
-		DisplayName: "Test Character",
-	}, nil)
-
-	var content string
-	s.InteractionRespondFn = func(interaction *discordgo.Interaction, response *discordgo.InteractionResponse) error {
-		content = response.Data.Content
-		return nil
-	}
-
-	i := &discordgo.InteractionCreate{
-		Interaction: &discordgo.Interaction{
-			Type: discordgo.InteractionMessageComponent,
-			Data: discordgo.MessageComponentInteractionData{
-				CustomID: "select_character_card",
-				Values:   []string{"char1"},
-			},
-		},
-	}
-	i.GuildID = "guild1"
-
-	r.handleComponent(s, i)
-
-	if content != fmt.Sprintf(responses.ListCharacters.SetSuccess, "Test Character") {
-		t.Errorf("unexpected response: %q", content)
-	}
-}
-
 func TestComponentCreate_IgnoresUnknownCustomID(t *testing.T) {
 	r, s, _, dbPath := setupRouter(t, &mockLLMClient{})
 	defer os.Remove(dbPath)
@@ -190,5 +157,43 @@ func TestComponentCreate_IgnoresNonComponentTypes(t *testing.T) {
 
 	if responded {
 		t.Error("expected non-component interaction to be ignored")
+	}
+}
+
+func TestInteractionCreate_DispatchesAutocomplete(t *testing.T) {
+	r, s, sm, dbPath := setupRouter(t, &mockLLMClient{})
+	defer os.Remove(dbPath)
+
+	sm.SaveCharacterCard(context.Background(), "guild1", &session.CharacterCard{
+		CharacterID: "miles-morales-ca8da118",
+		DisplayName: "Miles Morales",
+	})
+
+	var choices []*discordgo.ApplicationCommandOptionChoice
+	s.InteractionRespondFn = func(interaction *discordgo.Interaction, response *discordgo.InteractionResponse) error {
+		if response.Type != discordgo.InteractionApplicationCommandAutocompleteResult {
+			t.Errorf("expected autocomplete response type, got %v", response.Type)
+		}
+		choices = response.Data.Choices
+		return nil
+	}
+
+	i := &discordgo.InteractionCreate{
+		Interaction: &discordgo.Interaction{
+			Type: discordgo.InteractionApplicationCommandAutocomplete,
+			Data: discordgo.ApplicationCommandInteractionData{
+				Name: "deletecharacter",
+				Options: []*discordgo.ApplicationCommandInteractionDataOption{
+					{Name: "name", Value: "miles", Type: discordgo.ApplicationCommandOptionString, Focused: true},
+				},
+			},
+		},
+	}
+	i.GuildID = "guild1"
+
+	r.handleInteraction(s, i)
+
+	if len(choices) != 1 || choices[0].Value != "miles-morales-ca8da118" {
+		t.Errorf("expected character suggestion, got %v", choices)
 	}
 }

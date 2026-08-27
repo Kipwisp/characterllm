@@ -116,7 +116,7 @@ func TestSynthesizer_FetchCharacter(t *testing.T) {
 		if err != nil {
 			t.Fatalf("FetchCharacter failed: %v", err)
 		}
-		if res.Status != "OK" || !strings.Contains(res.PersonaSpec, "Detailed spec") {
+		if res.Status != SynthesisStatusOK || !strings.Contains(res.PersonaSpec, "Detailed spec") {
 			t.Errorf("unexpected synthesis result: %+v", res)
 		}
 	})
@@ -132,7 +132,7 @@ func TestSynthesizer_FetchCharacter(t *testing.T) {
 		if err != nil {
 			t.Fatalf("FetchCharacter failed: %v", err)
 		}
-		if res.Status != "UNKNOWN" {
+		if res.Status != SynthesisStatusUnknown {
 			t.Errorf("expected UNKNOWN status, got %s", res.Status)
 		}
 	})
@@ -145,10 +145,10 @@ func TestSynthesizer_ScenarioBlock(t *testing.T) {
 			Model:      "test-model",
 		},
 	}
-	// Mirrors the real synthesis prompt: the placeholder stands alone; the
-	// scenario header is supplied by the injected block, not the file.
+	// Mirrors the real synthesis prompt: the placeholders stand alone; the
+	// block headers are supplied by the injected blocks, not the file.
 	ps := &prompts.Set{
-		Synthesis: "### Output Structure\n{{SCENARIO_BLOCK}}\n### Input Data\n{{RESULTS}}",
+		Synthesis: "### Output Structure\n{{MODIFIERS_BLOCK}}\n\n{{SCENARIO_BLOCK}}\n### Input Data\n{{RESULTS}}",
 	}
 
 	capturePrompt := func(analysis *AnalysisResult) string {
@@ -176,9 +176,20 @@ func TestSynthesizer_ScenarioBlock(t *testing.T) {
 		t.Errorf("Expected scenario text in synthesis prompt, got:\n%s", with)
 	}
 
+	withModifiers := capturePrompt(&AnalysisResult{OfficialName: "Test Char", Modifiers: []string{"young", "grumpy"}})
+	if strings.Count(withModifiers, "### Modifiers") != 1 {
+		t.Errorf("Expected exactly one '### Modifiers' header with modifiers, got %d:\n%s", strings.Count(withModifiers, "### Modifiers"), withModifiers)
+	}
+	if !strings.Contains(withModifiers, "Modifiers: young, grumpy") {
+		t.Errorf("Expected modifiers text in synthesis prompt, got:\n%s", withModifiers)
+	}
+
 	without := capturePrompt(&AnalysisResult{OfficialName: "Test Char"})
 	if strings.Count(without, "### Scenario") != 0 {
 		t.Errorf("Expected no '### Scenario' section without a scenario, got:\n%s", without)
+	}
+	if strings.Count(without, "### Modifiers") != 0 {
+		t.Errorf("Expected no '### Modifiers' section without modifiers, got:\n%s", without)
 	}
 }
 
@@ -217,4 +228,144 @@ func TestParseSynthesis_StripsUnrequestedScenario(t *testing.T) {
 			t.Errorf("expected scenario section to be kept, got %q", res.PersonaSpec)
 		}
 	})
+}
+
+// Mirrors the real edit-section prompt's request block: the labels are
+// supplied by the injected placeholder values, not the file.
+const editPromptFixture = "### Request\n{{CHARACTER_BLOCK}}\n{{SERIES_BLOCK}}\n{{CONTEXT_BLOCK}}\n{{TARGET_BLOCK}}\n{{INSTRUCTION_BLOCK}}"
+
+func TestSynthesizer_RewriteSection(t *testing.T) {
+	cfg := &config.Config{
+		LLM: config.LLMConfig{
+			MaxRetries: 1,
+			Model:      "test-model",
+		},
+	}
+	// Mirrors the real edit-section prompt: the request block is filled from
+	// placeholders; the block labels are supplied by the injected values.
+	ps := &prompts.Set{EditSection: editPromptFixture}
+
+	spec := "### Identity & Temperament\nCold and questioning.\n\n### Appearance\nHuman.\n\n### Voice & Habits\nSlow cadence, dry wit.\n"
+
+	var capturedSystem, capturedPrompt string
+	mockLLM := &mocks.MockLLMClient{
+		GenerateResponseFn: func(ctx context.Context, msgs []llm.Message, model string) (string, string, error) {
+			capturedSystem = msgs[0].Content
+			capturedPrompt = msgs[1].Content
+			return "### Voice & Habits\nFast cadence, warm wit.", "rewrote it", nil
+		},
+	}
+	s := NewSynthesizer(nil, mockLLM, cfg, ps)
+
+	res, err := s.RewriteSection(context.Background(), SectionRewriteRequest{
+		DisplayName:  "Miles Morales",
+		OfficialName: "Miles G. Morales",
+		Series:       "Spider-Man",
+		Spec:         spec,
+		Section:      SectionVoice,
+		CurrentBody:  "Slow cadence, dry wit.",
+		Instruction:  "make him sound warmer",
+	})
+	if err != nil {
+		t.Fatalf("RewriteSection failed: %v", err)
+	}
+
+	if capturedSystem != editPromptFixture {
+		t.Errorf("system message must be the stored edit-section prompt, got %q", capturedSystem)
+	}
+	for _, want := range []string{
+		"Character: Miles Morales (official name: Miles G. Morales)",
+		"Series: Spider-Man",
+		"Rest of the persona specification",
+		"Cold and questioning",
+		"Current content:\nSlow cadence, dry wit.",
+		"Instruction: make him sound warmer",
+	} {
+		if !strings.Contains(capturedPrompt, want) {
+			t.Errorf("user prompt missing %q:\n%s", want, capturedPrompt)
+		}
+	}
+	if strings.Contains(capturedPrompt, "### Voice & Habits") {
+		t.Errorf("target section must be removed from the context block:\n%s", capturedPrompt)
+	}
+	if res.Body != "Fast cadence, warm wit." {
+		t.Errorf("Body = %q (leading headers must be stripped)", res.Body)
+	}
+	if res.Reasoning != "rewrote it" || res.Response == "" || res.Prompt != capturedPrompt {
+		t.Errorf("raw exchange not captured: %+v", res)
+	}
+
+	t.Run("Empty response is an error", func(t *testing.T) {
+		mockLLM.GenerateResponseFn = func(ctx context.Context, msgs []llm.Message, model string) (string, string, error) {
+			return "### Voice & Habits\n", "empty", nil
+		}
+		if _, err := s.RewriteSection(context.Background(), SectionRewriteRequest{
+			DisplayName: "Miles Morales",
+			Section:     SectionVoice,
+			Instruction: "anything",
+		}); err == nil {
+			t.Error("Expected error for empty section body")
+		}
+	})
+
+	t.Run("Whole persona rewrite returns the full spec", func(t *testing.T) {
+		mockLLM.GenerateResponseFn = func(ctx context.Context, msgs []llm.Message, model string) (string, string, error) {
+			capturedPrompt = msgs[1].Content
+			return "### Identity & Temperament\nPerpetually upbeat.\n\n### Appearance\nHuman.\n\n### Voice & Habits\nBright cadence.\n\n### Example Dialogue\n<START>\nUser: Hi\nCharacter: Hey!\n<END>\n", "ok", nil
+		}
+		res, err := s.RewriteSection(context.Background(), SectionRewriteRequest{
+			DisplayName:  "Miles Morales",
+			Spec:         spec + "\n### Example Dialogue\n<START>\n",
+			Instruction:  "he is always happy",
+			WholePersona: true,
+		})
+		if err != nil {
+			t.Fatalf("RewriteSection failed: %v", err)
+		}
+		for _, section := range []string{SectionIdentity, SectionAppearance, SectionVoice, SectionDialogue} {
+			if _, ok := ExtractSection(res.Body, section); !ok {
+				t.Errorf("section %s missing from returned spec:\n%s", section, res.Body)
+			}
+		}
+		if !strings.Contains(res.Body, "Perpetually upbeat") {
+			t.Errorf("rewritten content missing from spec:\n%s", res.Body)
+		}
+		if !strings.Contains(capturedPrompt, "Mode: Whole-Persona") || !strings.Contains(capturedPrompt, "he is always happy") {
+			t.Errorf("whole-persona prompt missing context:\n%s", capturedPrompt)
+		}
+	})
+
+	t.Run("Whole persona rewrite dropping a core header is rejected", func(t *testing.T) {
+		mockLLM.GenerateResponseFn = func(ctx context.Context, msgs []llm.Message, model string) (string, string, error) {
+			// Appearance section is missing entirely.
+			return "### Identity & Temperament\nPerpetually upbeat.\n\n### Voice & Habits\nBright cadence.\n\n### Example Dialogue\n<START>\n", "ok", nil
+		}
+		if _, err := s.RewriteSection(context.Background(), SectionRewriteRequest{
+			DisplayName:  "Miles Morales",
+			Spec:         spec,
+			Instruction:  "he is always happy",
+			WholePersona: true,
+		}); err == nil {
+			t.Error("Expected error when a core section header is dropped")
+		}
+	})
+}
+
+func TestStripSectionFormatting(t *testing.T) {
+	tests := []struct {
+		in   string
+		want string
+	}{
+		{"plain body", "plain body"},
+		{"### Voice & Habits\nrewritten body", "rewritten body"},
+		{"```\nbody line\n```", "body line"},
+		{"### Header\nmore body", "more body"},
+		{"### Header Only", ""},
+		{"\n\n  padded  \n\n", "padded"},
+	}
+	for _, tt := range tests {
+		if got := stripSectionFormatting(tt.in); got != tt.want {
+			t.Errorf("stripSectionFormatting(%q) = %q; want %q", tt.in, got, tt.want)
+		}
+	}
 }

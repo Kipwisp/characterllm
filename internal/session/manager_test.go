@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"testing"
 )
@@ -34,14 +35,9 @@ func TestCharacterCardOperations(t *testing.T) {
 		DisplayName:  "Display Name",
 		Description:  "Character Description",
 		Series:       "Series Name",
-		SourceURL:    "http://source.com",
-		Modifiers:    "mod1, mod2",
-		Scenario:     "A dark forest",
 	}
-	aliases := []string{"alias1", "alias2"}
-
 	t.Run("Save and Get Character Card", func(t *testing.T) {
-		err := m.SaveCharacterCard(ctx, guildID, card, aliases)
+		err := m.SaveCharacterCard(ctx, guildID, card)
 		if err != nil {
 			t.Fatalf("SaveCharacterCard failed: %v", err)
 		}
@@ -52,16 +48,6 @@ func TestCharacterCardOperations(t *testing.T) {
 		}
 		if got == nil || got.OfficialName != card.OfficialName {
 			t.Errorf("Expected %s, got %v", card.OfficialName, got)
-		}
-	})
-
-	t.Run("Get Card by Alias", func(t *testing.T) {
-		got, err := m.GetCardByAlias(ctx, guildID, "alias1")
-		if err != nil {
-			t.Fatalf("GetCardByAlias failed: %v", err)
-		}
-		if got == nil || got.CharacterID != "char1" {
-			t.Errorf("Expected char1, got %v", got)
 		}
 	})
 
@@ -84,6 +70,66 @@ func TestCharacterCardOperations(t *testing.T) {
 			t.Errorf("Expected nil for non-existent card, got %v", got)
 		}
 	})
+}
+
+func TestCountCharacterThreads(t *testing.T) {
+	m, tmpFile := setupManager(t)
+	defer os.Remove(tmpFile)
+	defer m.Close()
+	ctx := context.Background()
+
+	m.SaveCharacterCard(ctx, "guild1", &CharacterCard{CharacterID: "char1", DisplayName: "A"})
+	m.SaveCharacterCard(ctx, "guild1", &CharacterCard{CharacterID: "char2", DisplayName: "B"})
+	m.SetActiveCharacter(ctx, "guild1", "char2")
+	// Three messages across two threads for char2.
+	m.SaveMessage(ctx, "guild1", "thread-a", "user", "for char2")
+	m.SaveMessage(ctx, "guild1", "thread-a", "assistant", "for char2")
+	m.SaveMessage(ctx, "guild1", "thread-b", "user", "for char2")
+
+	// Counts the named character, not just the active one.
+	count, err := m.CountCharacterThreads(ctx, "guild1", "char1")
+	if err != nil || count != 0 {
+		t.Errorf("expected 0 for char1, got %d (err %v)", count, err)
+	}
+	count, err = m.CountCharacterThreads(ctx, "guild1", "char2")
+	if err != nil || count != 2 {
+		t.Errorf("expected 2 for char2, got %d (err %v)", count, err)
+	}
+}
+
+func TestDeleteCharacterCard(t *testing.T) {
+	m, tmpFile := setupManager(t)
+	defer os.Remove(tmpFile)
+	defer m.Close()
+	ctx := context.Background()
+
+	guildID := "guild1"
+	m.SaveCharacterCard(ctx, guildID, &CharacterCard{
+		CharacterID: "char1",
+		DisplayName: "Display Name",
+	})
+	m.SaveMessage(ctx, guildID, "", "user", "hello")
+	m.SetActiveCharacter(ctx, guildID, "char1")
+	m.PruneAndSummarize(ctx, guildID, "", "rolling summary", 0)
+
+	if err := m.DeleteCharacterCard(ctx, guildID, "char1"); err != nil {
+		t.Fatalf("DeleteCharacterCard failed: %v", err)
+	}
+
+	if card, err := m.GetCharacterCard(ctx, guildID, "char1"); err != nil || card != nil {
+		t.Errorf("expected card to be gone, got %v (err %v)", card, err)
+	}
+	if history, err := m.GetHistory(ctx, guildID, "", 10, 0); err != nil || len(history) != 0 {
+		t.Errorf("expected history to be gone, got %v (err %v)", history, err)
+	}
+	if summary, err := m.GetSummary(ctx, guildID, ""); err != nil || summary != "" {
+		t.Errorf("expected summary to be gone, got %q (err %v)", summary, err)
+	}
+
+	// Deleting an unknown character is a no-op.
+	if err := m.DeleteCharacterCard(ctx, guildID, "nosuchchar"); err != nil {
+		t.Errorf("deleting unknown character should be a no-op, got %v", err)
+	}
 }
 
 func TestChatHistoryOperations(t *testing.T) {
@@ -183,7 +229,7 @@ func TestActiveCharacterAndDetails(t *testing.T) {
 		DisplayName: "Display Name",
 		Description: "Character Description",
 	}
-	m.SaveCharacterCard(ctx, guildID, card, []string{})
+	m.SaveCharacterCard(ctx, guildID, card)
 	m.SetActiveCharacter(ctx, guildID, charID)
 
 	details, err := m.GetCharacterDetails(ctx, guildID)
@@ -409,7 +455,7 @@ func TestSetCharacterImage(t *testing.T) {
 	ctx := context.Background()
 
 	guildID := "guild1"
-	m.SaveCharacterCard(ctx, guildID, &CharacterCard{CharacterID: "char1", DisplayName: "C"}, nil)
+	m.SaveCharacterCard(ctx, guildID, &CharacterCard{CharacterID: "char1", DisplayName: "C"})
 
 	if err := m.SetCharacterImage(ctx, guildID, "char1", "http://img.example/c.png"); err != nil {
 		t.Fatalf("SetCharacterImage failed: %v", err)
@@ -435,7 +481,7 @@ func TestCharacterDetailsIncludesImageURL(t *testing.T) {
 	ctx := context.Background()
 
 	guildID := "guild1"
-	m.SaveCharacterCard(ctx, guildID, &CharacterCard{CharacterID: "char1", DisplayName: "C"}, nil)
+	m.SaveCharacterCard(ctx, guildID, &CharacterCard{CharacterID: "char1", DisplayName: "C"})
 	m.SetCharacterImage(ctx, guildID, "char1", "http://img.example/c.png")
 	m.SetActiveCharacter(ctx, guildID, "char1")
 
@@ -448,7 +494,6 @@ func TestCharacterDetailsIncludesImageURL(t *testing.T) {
 	}
 }
 
-
 func TestAppendToLastUserMessage(t *testing.T) {
 	m, tmpFile := setupManager(t)
 	defer os.Remove(tmpFile)
@@ -457,7 +502,7 @@ func TestAppendToLastUserMessage(t *testing.T) {
 
 	guildID := "guild1"
 	charID := "char1"
-	m.SaveCharacterCard(ctx, guildID, &CharacterCard{CharacterID: charID, DisplayName: "Test"}, nil)
+	m.SaveCharacterCard(ctx, guildID, &CharacterCard{CharacterID: charID, DisplayName: "Test"})
 	m.SetActiveCharacter(ctx, guildID, charID)
 
 	t.Run("appends to most recent user message only", func(t *testing.T) {
@@ -489,4 +534,55 @@ func TestAppendToLastUserMessage(t *testing.T) {
 			t.Error("expected an error when no user message exists")
 		}
 	})
+}
+
+func TestNewManager_OlderSchemaStillWorks(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "session_migrate*.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpFileName := tmpFile.Name()
+	tmpFile.Close()
+	defer os.Remove(tmpFileName)
+
+	// Simulate a database from an older build, with columns that no longer
+	// exist in the schema (orphan columns are left in place and unused).
+	db, err := sql.Open("sqlite", tmpFileName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TABLE character_cards (
+		guild_id TEXT,
+		character_id TEXT,
+		official_name TEXT,
+		series TEXT,
+		display_name TEXT,
+		description TEXT,
+		source_url TEXT,
+		modifiers TEXT,
+		scenario TEXT,
+		scenario_id TEXT,
+		image_url TEXT DEFAULT '',
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		PRIMARY KEY (guild_id, character_id)
+	)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	m, err := NewManager(tmpFileName, "Default Prompt")
+	if err != nil {
+		t.Fatalf("NewManager on pre-migration db failed: %v", err)
+	}
+	defer m.Close()
+
+	card := &CharacterCard{CharacterID: "c1", DisplayName: "C1", Series: "RDR2"}
+	if err := m.SaveCharacterCard(context.Background(), "guild1", card); err != nil {
+		t.Fatalf("SaveCharacterCard after migration failed: %v", err)
+	}
+	got, err := m.GetCharacterCard(context.Background(), "guild1", "c1")
+	if err != nil || got == nil || got.Series != "RDR2" {
+		t.Fatalf("Series round-trip after migration failed: %v / %+v", err, got)
+	}
 }

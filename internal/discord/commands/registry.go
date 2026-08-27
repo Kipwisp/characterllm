@@ -18,6 +18,7 @@ import (
 type Deps struct {
 	Session     *session.Manager
 	LLM         llm.LLMClient
+	Model       string
 	Audit       *audit.AuditLogger
 	ImageClient images.ImageClient
 	Synthesizer research.Synthesizer
@@ -44,6 +45,7 @@ type prefixRoute struct {
 // Registry is the constructed registry of the bot's commands: named slash
 // commands plus the single dispatch point for message component interactions.
 type Registry struct {
+	session           *session.Manager
 	byName            map[string]slashCommand
 	componentRoutes   map[string]componentFunc
 	componentPrefixes []prefixRoute
@@ -52,25 +54,34 @@ type Registry struct {
 
 // New builds the command registry; it is the single place listing the bot's commands.
 func New(d Deps) *Registry {
-	listCharacters := &listCharactersCmd{session: d.Session, imageClient: d.ImageClient}
-	setCharacter := &setCharacterCmd{session: d.Session, imageClient: d.ImageClient, synthesizer: d.Synthesizer, audit: d.Audit}
+	setCharacter := &setCharacterCmd{session: d.Session, imageClient: d.ImageClient}
+	createCharacter := &createCharacterCmd{session: d.Session, imageClient: d.ImageClient, synthesizer: d.Synthesizer, audit: d.Audit}
+	deleteCharacter := &deleteCharacterCmd{session: d.Session, imageClient: d.ImageClient}
+	editCharacter := &editCharacterCmd{session: d.Session, imageClient: d.ImageClient, synthesizer: d.Synthesizer, audit: d.Audit}
+	viewCharacter := &viewCharacterCmd{session: d.Session, imageClient: d.ImageClient}
 
 	registry := &Registry{
-		byName: make(map[string]slashCommand),
+		session: d.Session,
+		byName:  make(map[string]slashCommand),
 		componentRoutes: map[string]componentFunc{
-			selectCharacterCardID: listCharacters.handleSelectCard,
-			setCharacterImageID:   setCharacter.handleImageSelection,
+			setCharacterImageID: createCharacter.handleImageSelection,
 		},
 		componentPrefixes: []prefixRoute{
-			{prefix: listPaginationPrefix, handle: listCharacters.handlePagination},
+			{prefix: deleteConfirmPrefix, handle: deleteCharacter.handleDeleteConfirm},
+			{prefix: deleteCancelPrefix, handle: deleteCharacter.handleDeleteCancel},
+			{prefix: editAcceptPrefix, handle: editCharacter.handleEditAccept},
+			{prefix: editRejectPrefix, handle: editCharacter.handleEditReject},
 		},
 	}
 	for _, cmd := range []slashCommand{
 		&resetChatCmd{session: d.Session, lock: d.Lock},
 		&statusCmd{llm: d.LLM},
-		listCharacters,
-		&setAvatarCmd{session: d.Session, imageClient: d.ImageClient},
 		setCharacter,
+		viewCharacter,
+		createCharacter,
+		deleteCharacter,
+		editCharacter,
+		&setAvatarCmd{session: d.Session, imageClient: d.ImageClient},
 	} {
 		def := cmd.Definition()
 		registry.byName[def.Name] = cmd
@@ -89,6 +100,24 @@ func (r *Registry) Execute(ctx context.Context, name string, s DiscordSession, i
 		return fmt.Errorf("%w: %s", ErrUnknownCommand, name)
 	}
 	return cmd.Execute(ctx, s, i)
+}
+
+// HandleAutocomplete responds to autocomplete interactions on the character
+// name options by suggesting the guild's saved characters.
+func (r *Registry) HandleAutocomplete(ctx context.Context, s DiscordSession, i *discordgo.InteractionCreate) {
+	data := i.ApplicationCommandData()
+	if len(data.Options) == 0 || !data.Options[0].Focused {
+		return
+	}
+
+	// The "current (active character)" suggestion only makes sense for the
+	// commands that accept that key.
+	includeCurrent := data.Name == "viewcharacterdetails" || data.Name == "deletecharacter" || data.Name == "editcharacter"
+	choices := autocompleteCharacters(ctx, r.session, i.GuildID, data.Options[0].StringValue(), includeCurrent)
+	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionApplicationCommandAutocompleteResult,
+		Data: &discordgo.InteractionResponseData{Choices: choices},
+	})
 }
 
 // HandleComponent dispatches message component interactions (buttons, select menus)

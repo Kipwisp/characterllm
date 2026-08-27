@@ -116,7 +116,7 @@ func TestHandleMessageCreate_ReplyToBot(t *testing.T) {
 		CharacterID: charID,
 		DisplayName: "TestChar",
 		Description: "A test character",
-	}, []string{})
+	})
 	sm.SetActiveCharacter(ctx, guildID, charID)
 
 	sentResponse := ""
@@ -161,7 +161,7 @@ func TestHandleMessageCreate_VisionAttachmentForwarded(t *testing.T) {
 		CharacterID: charID,
 		DisplayName: "TestChar",
 		Description: "A test character",
-	}, []string{})
+	})
 	sm.SetActiveCharacter(ctx, guildID, charID)
 	c.Config.LLM.Vision = true
 
@@ -223,7 +223,7 @@ func TestHandleMessageCreate_ImageNotesStrippedAndPersisted(t *testing.T) {
 		CharacterID: charID,
 		DisplayName: "TestChar",
 		Description: "A test character",
-	}, []string{})
+	})
 	sm.SetActiveCharacter(ctx, guildID, charID)
 	c.Config.LLM.Vision = true
 
@@ -295,7 +295,7 @@ func TestHandleMessageCreate_MaxImagesCapsForwardedAttachments(t *testing.T) {
 		CharacterID: charID,
 		DisplayName: "TestChar",
 		Description: "A test character",
-	}, []string{})
+	})
 	sm.SetActiveCharacter(ctx, guildID, charID)
 	c.Config.LLM.Vision = true
 
@@ -374,7 +374,7 @@ func TestHandleMessageCreate_VisionDisabledIgnoresAttachments(t *testing.T) {
 		CharacterID: charID,
 		DisplayName: "TestChar",
 		Description: "A test character",
-	}, []string{})
+	})
 	sm.SetActiveCharacter(ctx, guildID, charID)
 	// Vision stays false (the setupChat default).
 
@@ -432,7 +432,7 @@ func TestHandleMessageCreate_MemberNickname(t *testing.T) {
 		CharacterID: charID,
 		DisplayName: "TestChar",
 		Description: "A test character",
-	}, []string{})
+	})
 	sm.SetActiveCharacter(ctx, guildID, charID)
 
 	var capturedMessages []llm.Message
@@ -482,7 +482,7 @@ func TestHandleMessageCreate_Success(t *testing.T) {
 		CharacterID: charID,
 		DisplayName: "TestChar",
 		Description: "A test character",
-	}, []string{})
+	})
 	sm.SetActiveCharacter(ctx, guildID, charID)
 
 	sentResponse := ""
@@ -538,7 +538,7 @@ func TestHandleMessageCreate_SystemPromptSubstitution(t *testing.T) {
 		CharacterID: charID,
 		DisplayName: "TestChar",
 		Description: "A test character",
-	}, []string{})
+	})
 	sm.SetActiveCharacter(ctx, guildID, charID)
 
 	var capturedMessages []llm.Message
@@ -566,7 +566,7 @@ func TestHandleMessageCreate_SystemPromptSubstitution(t *testing.T) {
 
 	found := false
 	for _, msg := range capturedMessages {
-		if msg.Role == "system" && msg.Content == "A test character is a helpful bot." {
+		if msg.Role == "system" && msg.Content == "You are the character named TestChar.\n\nA test character is a helpful bot." {
 			found = true
 			break
 		}
@@ -598,7 +598,7 @@ func TestHandleMessageCreate_HistoryError(t *testing.T) {
 		CharacterID: charID,
 		DisplayName: "TestChar",
 		Description: "A test character",
-	}, []string{})
+	})
 	sm.SetActiveCharacter(ctx, guildID, charID)
 
 	m := &discordgo.MessageCreate{
@@ -640,7 +640,7 @@ func TestProcessChat_Error(t *testing.T) {
 	}
 	m.GuildID = "guild1"
 
-	err := c.processChat(context.Background(), s, m, "char1", "prompt", []llm.Message{}, "req1")
+	err := c.processChat(context.Background(), s, m, "", "char1", "prompt", []llm.Message{}, "req1")
 
 	if err == nil {
 		t.Error("Expected error, got nil")
@@ -665,7 +665,7 @@ func TestHandleMessageCreate_SerializesSameConversation(t *testing.T) {
 		CharacterID: charID,
 		DisplayName: "TestChar",
 		Description: "A test character",
-	}, []string{})
+	})
 	sm.SetActiveCharacter(ctx, guildID, charID)
 
 	var mu sync.Mutex
@@ -765,7 +765,7 @@ func TestHandleMessageCreate_ParallelAcrossConversations(t *testing.T) {
 			CharacterID: "char1",
 			DisplayName: "TestChar",
 			Description: "A test character",
-		}, []string{})
+		})
 		sm.SetActiveCharacter(ctx, guildID, "char1")
 	}
 
@@ -845,7 +845,7 @@ func TestCompaction_TriggeredThroughHandler(t *testing.T) {
 		CharacterID: charID,
 		DisplayName: "TestChar",
 		Description: "A test character",
-	}, []string{})
+	})
 	sm.SetActiveCharacter(ctx, guildID, charID)
 
 	c.Config.LLM.CompactionThreshold = 0.1

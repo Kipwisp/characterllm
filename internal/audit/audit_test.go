@@ -7,91 +7,139 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"characterllm/internal/llm"
 )
 
-func TestLogConversation(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "audit_test")
+func logTurn(t *testing.T, a *AuditLogger, guildID, threadID, charID string, turn Turn) {
+	t.Helper()
+	a.Log(context.Background(), guildID, threadID, charID, "req789", turn)
+}
+
+func readLog(t *testing.T, dir, name string) string {
+	t.Helper()
+	content, err := os.ReadFile(filepath.Join(dir, name))
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("log file not readable: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	return string(content)
+}
 
-	auditLogger := NewAuditLogger(tmpDir)
-	ctx := context.Background()
-	guildID := "guild123"
-	charID := "char456"
-	prompt := "Hello character!"
-	reasoning := "User is greeting me."
-	response := "Hello there!"
-	reqID := "req789"
-	history := []llm.Message{
-		{Role: "user", Content: "Hi"},
-		{Role: "assistant", Content: "Hello!"},
-	}
-	latency := 100 * time.Millisecond
+func TestLogTurn(t *testing.T) {
+	tmpDir := t.TempDir()
+	a := NewAuditLogger(tmpDir, true)
 
-	auditLogger.LogConversation(ctx, guildID, charID, prompt, reasoning, response, history, latency, reqID)
+	logTurn(t, a, "guild123", "", "char456", Turn{
+		Kind:      KindChat,
+		Model:     "test-model",
+		Latency:   100 * time.Millisecond,
+		System:    "You are a helpful character.\nStay in persona.",
+		Prompt:    "Alice: Hello character!",
+		Reasoning: "User is greeting me.",
+		Response:  "Hello there!\nHow can I help?",
+	})
 
-	filename := filepath.Join(tmpDir, guildID+"_"+charID+".log")
-	if _, err := os.Stat(filename); os.IsNotExist(err) {
-		t.Fatalf("Log file not created: %s", filename)
-	}
+	content := readLog(t, tmpDir, "guild123_char456.log")
 
-	content, err := os.ReadFile(filename)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	contentStr := string(content)
 	expectedParts := []string{
-		"REQUEST_ID: " + reqID,
-		"GUILD: " + guildID,
-		"CHAR: " + charID,
-		"LATENCY: 100ms",
-		"HISTORY:",
-		"[user] Hi",
-		"[assistant] Hello!",
-		"PROMPT: " + prompt,
-		"REASONING:\n" + reasoning,
-		"RESPONSE:\n" + response,
+		"kind=chat",
+		"req=req789",
+		"model=test-model",
+		"100ms",
+		"system prompt:",
+		"    You are a helpful character.",
+		"    Stay in persona.",
+		"prompt:",
+		"    Alice: Hello character!",
+		"reasoning:",
+		"    User is greeting me.",
+		"response:",
+		"    Hello there!",
+		"    How can I help?",
 	}
-
 	for _, part := range expectedParts {
-		if !strings.Contains(contentStr, part) {
-			t.Errorf("Log content missing expected part: %q\nContent: %s", part, contentStr)
+		if !strings.Contains(content, part) {
+			t.Errorf("log content missing expected part: %q\nContent:\n%s", part, content)
 		}
 	}
 }
 
-func TestLogConversationNoReasoning(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "audit_test_no_reasoning")
+func TestLogTurnOmitsEmptySections(t *testing.T) {
+	tmpDir := t.TempDir()
+	a := NewAuditLogger(tmpDir, true)
+
+	logTurn(t, a, "guild123", "", "char456", Turn{
+		Kind:     KindChat,
+		Latency:  100 * time.Millisecond,
+		Prompt:   "Hello",
+		Response: "Hi!",
+	})
+
+	content := readLog(t, tmpDir, "guild123_char456.log")
+
+	for _, section := range []string{"reasoning:", "system prompt:", "model="} {
+		if strings.Contains(content, section) {
+			t.Errorf("log content should not contain %q section:\n%s", section, content)
+		}
+	}
+}
+
+func TestLogTurnThread(t *testing.T) {
+	tmpDir := t.TempDir()
+	a := NewAuditLogger(tmpDir, true)
+
+	logTurn(t, a, "guild123", "thread999", "char456", Turn{
+		Kind:     KindChat,
+		Latency:  100 * time.Millisecond,
+		Prompt:   "Hello",
+		Response: "Hi!",
+	})
+
+	content := readLog(t, tmpDir, "guild123_char456_thread999.log")
+	if !strings.Contains(content, "thread=thread999") {
+		t.Errorf("log content missing thread in header:\n%s", content)
+	}
+}
+
+func TestSystemPromptRecordedOnceUntilChanged(t *testing.T) {
+	tmpDir := t.TempDir()
+	a := NewAuditLogger(tmpDir, true)
+
+	turn := Turn{Kind: KindChat, Latency: time.Millisecond, System: "v1 system prompt", Prompt: "p", Response: "r"}
+	logTurn(t, a, "guild123", "", "char456", turn)
+	logTurn(t, a, "guild123", "", "char456", turn)
+
+	content := readLog(t, tmpDir, "guild123_char456.log")
+	if got := strings.Count(content, "system prompt:"); got != 1 {
+		t.Fatalf("expected system prompt recorded once, got %d:\n%s", got, content)
+	}
+
+	turn.System = "v2 system prompt"
+	logTurn(t, a, "guild123", "", "char456", turn)
+
+	content = readLog(t, tmpDir, "guild123_char456.log")
+	if got := strings.Count(content, "system prompt:"); got != 2 {
+		t.Fatalf("expected system prompt re-recorded after change, got %d:\n%s", got, content)
+	}
+	if !strings.Contains(content, "v2 system prompt") {
+		t.Errorf("log content missing changed system prompt:\n%s", content)
+	}
+}
+
+func TestLogDisabled(t *testing.T) {
+	tmpDir := t.TempDir()
+	a := NewAuditLogger(tmpDir, false)
+
+	logTurn(t, a, "guild123", "", "char456", Turn{
+		Kind:     KindChat,
+		Latency:  time.Millisecond,
+		Prompt:   "Hello",
+		Response: "Hi!",
+	})
+
+	entries, err := os.ReadDir(tmpDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(tmpDir)
-
-	auditLogger := NewAuditLogger(tmpDir)
-	ctx := context.Background()
-	guildID := "guild123"
-	charID := "char456"
-	prompt := "Hello character!"
-	reasoning := ""
-	response := "Hello there!"
-	reqID := "req789"
-	history := []llm.Message{}
-	latency := 100 * time.Millisecond
-
-	auditLogger.LogConversation(ctx, guildID, charID, prompt, reasoning, response, history, latency, reqID)
-
-	filename := filepath.Join(tmpDir, guildID+"_"+charID+".log")
-	content, err := os.ReadFile(filename)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if strings.Contains(string(content), "REASONING:") {
-		t.Error("Log content should not contain REASONING section when reasoning is empty")
+	if len(entries) != 0 {
+		t.Errorf("expected no log files when disabled, got %d", len(entries))
 	}
 }

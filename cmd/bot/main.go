@@ -35,7 +35,7 @@ func main() {
 	}
 
 	// Load prompt templates; fail fast if any file is missing or unreadable
-	promptSet, err := prompts.Load(cfg.Prompts.SystemPath, cfg.Prompts.CompactionPath, cfg.Prompts.SynthesisPath, cfg.Prompts.AnalyzerPath)
+	promptSet, err := prompts.Load(cfg.Prompts.SystemPath, cfg.Prompts.CompactionPath, cfg.Prompts.SynthesisPath, cfg.Prompts.AnalyzerPath, cfg.Prompts.EditSectionPath)
 	if err != nil {
 		slog.Error("failed to load prompt files", "error", err)
 		os.Exit(1)
@@ -53,7 +53,7 @@ func main() {
 	defer sessionMgr.Close()
 
 	// Setup Discord Handlers (Pass config for model name)
-	auditLogger := audit.NewAuditLogger("logs")
+	auditLogger := audit.NewAuditLogger("logs", cfg.General.ConversationLog)
 
 	searchProvider, imageSearchProvider, err := search.NewProvider(cfg.Images.Provider, cfg.Images.SearXNGURL)
 	if err != nil {
@@ -74,6 +74,7 @@ func main() {
 	commandRegistry := commands.New(commands.Deps{
 		Session:     sessionMgr,
 		LLM:         llmClient,
+		Model:       cfg.LLM.Model,
 		Audit:       auditLogger,
 		ImageClient: imageClient,
 		Synthesizer: synthesizer,

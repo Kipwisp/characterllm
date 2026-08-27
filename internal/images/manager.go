@@ -21,6 +21,8 @@ type ImageClient interface {
 	// ImageToDataURI downloads the image at url, processes it, and returns it
 	// as a data URI suitable for a vision model. Nothing is written to disk.
 	ImageToDataURI(ctx context.Context, url string) (string, error)
+	// DeleteImage removes a character's cached image from disk.
+	DeleteImage(guildID, characterID string) error
 	GetCache() *ImageCache
 }
 
@@ -34,6 +36,11 @@ type Client struct {
 	Provider search.ImageSearchProvider
 	Cache    *ImageCache
 	Fetcher  *safehttp.Fetcher
+}
+
+// DeleteImage removes a character's cached image from disk.
+func (c *Client) DeleteImage(guildID, characterID string) error {
+	return c.Cache.DeleteImage(guildID, characterID)
 }
 
 // GetCache returns the image cache.

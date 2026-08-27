@@ -1,6 +1,8 @@
 package utils
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -29,49 +31,105 @@ func TestTruncateString(t *testing.T) {
 
 func TestCreateCharacterSlug(t *testing.T) {
 	tests := []struct {
-		name       string
-		charName   string
-		modifiers  []string
-		scenarioID string
-		expected   string
+		name     string
+		charName string
+		taken    map[string]bool
+		check    func(t *testing.T, got string)
 	}{
 		{
-			"Basic slug",
-			"Character Name",
-			[]string{"Modifier 1", "Modifier 2"},
-			"scenario-123",
-			"modifier_1_modifier_2##character_name##scenario-123",
+			name:     "Basic slug format",
+			charName: "Character Name",
+			check: func(t *testing.T, got string) {
+				if !strings.HasPrefix(got, "character-name-") || len(got) != len("character-name-")+4 {
+					t.Errorf("unexpected slug format: %q", got)
+				}
+			},
 		},
 		{
-			"Sorted modifiers",
-			"Character Name",
-			[]string{"Z Modifier", "A Modifier"},
-			"scenario-123",
-			"a_modifier_z_modifier##character_name##scenario-123",
+			name:     "Punctuation collapsed to dashes",
+			charName: "Spider-Man",
+			check: func(t *testing.T, got string) {
+				if !strings.HasPrefix(got, "spider-man-") {
+					t.Errorf("unexpected prefix: %q", got)
+				}
+			},
 		},
 		{
-			"No modifiers",
-			"Character Name",
-			[]string{},
-			"scenario-123",
-			"##character_name##scenario-123",
+			name:     "Case folded",
+			charName: "CHARACTER NAME",
+			check: func(t *testing.T, got string) {
+				if !strings.HasPrefix(got, "character-name-") {
+					t.Errorf("unexpected prefix: %q", got)
+				}
+			},
 		},
 		{
-			"Case insensitivity",
-			"CHARACTER NAME",
-			[]string{"MODIFIER"},
-			"SCENARIO",
-			"modifier##character_name##scenario",
+			name:     "Empty name yields number only",
+			charName: "",
+			check: func(t *testing.T, got string) {
+				if len(got) != 4 {
+					t.Errorf("expected bare 4-digit ID, got %q", got)
+				}
+			},
+		},
+		{
+			name:     "Avoids taken IDs",
+			charName: "Miles Morales",
+			taken:    map[string]bool{"miles-morales-0000": true},
+			check: func(t *testing.T, got string) {
+				if got == "miles-morales-0000" {
+					t.Errorf("minted a taken ID: %q", got)
+				}
+			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := CreateCharacterSlug(tt.charName, tt.modifiers, tt.scenarioID)
-			if got != tt.expected {
-				t.Errorf("CreateCharacterSlug(%q, %v, %q) = %q; want %q", tt.charName, tt.modifiers, tt.scenarioID, got, tt.expected)
-			}
+			tt.check(t, CreateCharacterSlug(tt.charName, tt.taken))
 		})
+	}
+}
+
+func TestCreateCharacterSlug_Properties(t *testing.T) {
+	// The suffix is a 4-digit decimal, unique against the taken set.
+	for i := 0; i < 50; i++ {
+		got := CreateCharacterSlug("Miles Morales", nil)
+		if !strings.HasPrefix(got, "miles-morales-") {
+			t.Fatalf("unexpected slug %q", got)
+		}
+		suffix := got[len("miles-morales-"):]
+		if len(suffix) != 4 {
+			t.Fatalf("suffix must be 4 digits: %q", got)
+		}
+		for _, r := range suffix {
+			if r < '0' || r > '9' {
+				t.Fatalf("suffix contains non-digit: %q", got)
+			}
+		}
+	}
+
+	// A fully taken suffix space with a short prefix would loop; with 10000
+	// slots and a realistic card count, exhaustion is not a concern. Verify
+	// the retry works when most of a small prefix's space is taken.
+	taken := make(map[string]bool)
+	for n := 0; n < 9999; n++ {
+		taken[fmt.Sprintf("m-%04d", n)] = true
+	}
+	got := CreateCharacterSlug("M", taken)
+	if got != "m-9999" {
+		t.Errorf("expected the single free ID m-9999, got %q", got)
+	}
+
+	// Bounded length, filesystem/Discord-safe.
+	long := CreateCharacterSlug(strings.Repeat("a", 200), nil)
+	if len(long) > 37 {
+		t.Errorf("slug exceeds bound: %d chars (%q)", len(long), long)
+	}
+	for _, r := range long {
+		if !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-') {
+			t.Fatalf("slug contains unsafe rune %q: %q", r, long)
+		}
 	}
 }
 

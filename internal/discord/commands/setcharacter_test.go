@@ -2,93 +2,61 @@ package commands
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"strings"
 	"testing"
 
-	"characterllm/internal/research"
-	"characterllm/internal/responses"
-	"characterllm/internal/search"
 	"characterllm/internal/session"
+
 	"github.com/bwmarrin/discordgo"
 )
 
-func TestSetCharacterCmd_CachedAlias(t *testing.T) {
+func newSetInteraction(guildID, name string) *discordgo.InteractionCreate {
+	i := &discordgo.InteractionCreate{
+		Interaction: &discordgo.Interaction{
+			Type: discordgo.InteractionApplicationCommand,
+			Data: discordgo.ApplicationCommandInteractionData{
+				Name: "setcharacter",
+				Options: []*discordgo.ApplicationCommandInteractionDataOption{
+					{Name: "name", Value: name, Type: discordgo.ApplicationCommandOptionString},
+				},
+			},
+		},
+	}
+	i.GuildID = guildID
+	return i
+}
+
+func TestSetCharacterCmd_ActivateByDisplayName(t *testing.T) {
 	cmdCtx, s, dbPath := setupCommandTest(t)
 	defer os.Remove(dbPath)
 
 	guildID := "guild1"
-	charID := "char123"
-	displayName := "Test Character"
-	alias := "testalias"
-
-	sm := cmdCtx.Session
-	sm.SaveCharacterCard(context.Background(), guildID, &session.CharacterCard{
-		CharacterID: charID,
-		DisplayName: displayName,
-	}, []string{alias})
-
-	// Mock Image Client to avoid real search/cache
-	mockImg := &mockImageClient{
-		SearchImagesFn: func(ctx context.Context, query string, limit int) ([]search.Image, error) {
-			return []search.Image{{URL: "http://example.com/img.jpg", Title: "Img"}}, nil
-		},
-		SaveImageFn: func(ctx context.Context, guildID, characterID, url string) (string, error) {
-			return "/tmp/img.jpg", nil
-		},
-		ImageToBase64Fn: func(ctx context.Context, path string) (string, error) {
-			return "data:image/jpeg;base64,abc", nil
-		},
-	}
-	cmdCtx.ImageClient = mockImg
+	charID := "char1"
+	cmdCtx.Session.SaveCharacterCard(context.Background(), guildID, &session.CharacterCard{
+		CharacterID:  charID,
+		DisplayName:  "Miles Morales",
+		OfficialName: "Miles Morales",
+	})
 
 	var capturedContent string
 	s.InteractionRespondFn = func(interaction *discordgo.Interaction, response *discordgo.InteractionResponse) error {
 		capturedContent = response.Data.Content
 		return nil
 	}
-
-	nicknameUpdated := false
 	s.GuildMemberNicknameFn = func(guildID string, member string, nickname string) error {
-		if nickname == displayName {
-			nicknameUpdated = true
-		}
 		return nil
 	}
 
-	i := &discordgo.InteractionCreate{
-		Interaction: &discordgo.Interaction{
-			Type: discordgo.InteractionApplicationCommand,
-			Data: discordgo.ApplicationCommandInteractionData{
-				Options: []*discordgo.ApplicationCommandInteractionDataOption{
-					{
-						Name:  "prompt",
-						Value: alias,
-						Type:  discordgo.ApplicationCommandOptionString,
-					},
-				},
-			},
-		},
-	}
-	i.GuildID = guildID
-
-	cmd := &setCharacterCmd{session: cmdCtx.Session, imageClient: cmdCtx.ImageClient, synthesizer: cmdCtx.Synthesizer, audit: cmdCtx.Audit}
-	err := cmd.Execute(context.Background(), s, i)
-
-	if err != nil {
+	cmd := &setCharacterCmd{session: cmdCtx.Session, imageClient: cmdCtx.ImageClient}
+	if err := cmd.Execute(context.Background(), s, newSetInteraction(guildID, "miles morales")); err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
 
-	if !strings.Contains(capturedContent, "Creating") {
-		t.Errorf("Expected response to contain 'Creating', got %q", capturedContent)
+	if !strings.Contains(capturedContent, "Character set to **Miles Morales**!") {
+		t.Errorf("Expected set success message, got %q", capturedContent)
 	}
-
-	if !nicknameUpdated {
-		t.Error("Expected bot nickname to be updated")
-	}
-
-	active, err := sm.GetCharacterDetails(context.Background(), guildID)
+	active, err := cmdCtx.Session.GetCharacterDetails(context.Background(), guildID)
 	if err != nil {
 		t.Fatalf("GetCharacterDetails failed: %v", err)
 	}
@@ -97,424 +65,82 @@ func TestSetCharacterCmd_CachedAlias(t *testing.T) {
 	}
 }
 
-func TestSetCharacterCmd_NewCharacter_Success(t *testing.T) {
+func TestSetCharacterCmd_ActivateByCharacterID(t *testing.T) {
 	cmdCtx, s, dbPath := setupCommandTest(t)
 	defer os.Remove(dbPath)
 
 	guildID := "guild1"
-	userInput := "Character Name"
-	officialName := "Official Character Name"
-	displayName := "Display Name"
-	personaSpec := "Persona specification text"
-
-	// Mock Synthesizer
-	mockSynth := &mockSynthesizer{
-		AnalyzeInputFn: func(ctx context.Context, input string) (*research.AnalysisResult, string, string, error) {
-			return &research.AnalysisResult{
-				Status:       "OK",
-				OfficialName: officialName,
-				DisplayName:  displayName,
-				Series:       "Series Name",
-				Aliases:      []string{"alias1"},
-			}, "analysis reasoning", "raw response", nil
-		},
-		FetchCharacterFn: func(ctx context.Context, analysis *research.AnalysisResult) (*research.SynthesisResult, error) {
-			return &research.SynthesisResult{
-				Status:       "OK",
-				PersonaSpec:  personaSpec,
-				Reasoning:    "synthesis reasoning",
-				ResearchData: "some data",
-			}, nil
-		},
-	}
-	cmdCtx.Synthesizer = mockSynth
-
-	// Mock Image Client
-	mockImg := &mockImageClient{
-		SearchImagesFn: func(ctx context.Context, query string, limit int) ([]search.Image, error) {
-			return []search.Image{{URL: "http://example.com/img.jpg", Title: "Img"}}, nil
-		},
-		SaveImageFn: func(ctx context.Context, guildID, characterID, url string) (string, error) {
-			return "/tmp/img.jpg", nil
-		},
-		ImageToBase64Fn: func(ctx context.Context, path string) (string, error) {
-			return "data:image/jpeg;base64,abc", nil
-		},
-	}
-	cmdCtx.ImageClient = mockImg
+	cmdCtx.Session.SaveCharacterCard(context.Background(), guildID, &session.CharacterCard{
+		CharacterID: "miles-morales-ca8da118",
+		DisplayName: "Miles Morales",
+	})
 
 	var capturedContent string
 	s.InteractionRespondFn = func(interaction *discordgo.Interaction, response *discordgo.InteractionResponse) error {
 		capturedContent = response.Data.Content
 		return nil
 	}
-	s.InteractionResponseEditFn = func(interaction *discordgo.Interaction, edit *discordgo.WebhookEdit) (*discordgo.Message, error) {
-		capturedContent = *edit.Content
-		return nil, nil
+
+	cmd := &setCharacterCmd{session: cmdCtx.Session, imageClient: cmdCtx.ImageClient}
+	if err := cmd.Execute(context.Background(), s, newSetInteraction(guildID, "miles-morales-ca8da118")); err != nil {
+		t.Fatalf("Execute failed: %v", err)
 	}
-	s.GuildMemberNicknameFn = func(guildID string, member string, nickname string) error {
+	if !strings.Contains(capturedContent, "Character set to **Miles Morales**!") {
+		t.Errorf("Expected set success message, got %q", capturedContent)
+	}
+}
+
+func TestSetCharacterCmd_ActivateNotFound(t *testing.T) {
+	cmdCtx, s, dbPath := setupCommandTest(t)
+	defer os.Remove(dbPath)
+
+	var capturedContent string
+	s.InteractionRespondFn = func(interaction *discordgo.Interaction, response *discordgo.InteractionResponse) error {
+		capturedContent = response.Data.Content
 		return nil
 	}
 
-	i := &discordgo.InteractionCreate{
-		Interaction: &discordgo.Interaction{
-			Type: discordgo.InteractionApplicationCommand,
-			Data: discordgo.ApplicationCommandInteractionData{
-				Options: []*discordgo.ApplicationCommandInteractionDataOption{
-					{
-						Name:  "prompt",
-						Value: userInput,
-						Type:  discordgo.ApplicationCommandOptionString,
-					},
-				},
-			},
-		},
-	}
-	i.GuildID = guildID
-
-	cmd := &setCharacterCmd{session: cmdCtx.Session, imageClient: cmdCtx.ImageClient, synthesizer: cmdCtx.Synthesizer, audit: cmdCtx.Audit}
-	err := cmd.Execute(context.Background(), s, i)
-
-	if err != nil {
+	cmd := &setCharacterCmd{session: cmdCtx.Session, imageClient: cmdCtx.ImageClient}
+	if err := cmd.Execute(context.Background(), s, newSetInteraction("guild1", "Unknown Hero")); err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
-
-	if capturedContent == "" {
-		t.Error("Expected captured content in response, got empty string")
+	if !strings.Contains(capturedContent, "/createcharacter") {
+		t.Errorf("Expected suggestion to create the character, got %q", capturedContent)
 	}
 }
 
-func TestSetCharacterCmd_AnalysisFailures(t *testing.T) {
-	tests := []struct {
-		name           string
-		status         string
-		ambiguities    []string
-		expectedString string
-	}{
-		{"Unknown", "UNKNOWN", nil, "I couldn't find any reliable information"},
-		{"Ambiguous", "AMBIGUOUS", []string{"Char A", "Char B"}, "I found multiple characters"},
-		{"Injection", "INJECTION", nil, "Nice try! I'm not falling for that prompt injection"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cmdCtx, s, dbPath := setupCommandTest(t)
-			defer os.Remove(dbPath)
-
-			guildID := "guild1"
-			userInput := "Some Input"
-
-			mockSynth := &mockSynthesizer{
-				AnalyzeInputFn: func(ctx context.Context, input string) (*research.AnalysisResult, string, string, error) {
-					return &research.AnalysisResult{
-						Status:      tt.status,
-						Ambiguities: tt.ambiguities,
-					}, "reasoning", "raw", nil
-				},
-			}
-			cmdCtx.Synthesizer = mockSynth
-
-			var capturedContent string
-			s.InteractionResponseEditFn = func(interaction *discordgo.Interaction, edit *discordgo.WebhookEdit) (*discordgo.Message, error) {
-				capturedContent = *edit.Content
-				return nil, nil
-			}
-
-			i := &discordgo.InteractionCreate{
-				Interaction: &discordgo.Interaction{
-					Type: discordgo.InteractionApplicationCommand,
-					Data: discordgo.ApplicationCommandInteractionData{
-						Options: []*discordgo.ApplicationCommandInteractionDataOption{
-							{
-								Name:  "prompt",
-								Value: userInput,
-								Type:  discordgo.ApplicationCommandOptionString,
-							},
-						},
-					},
-				},
-			}
-			i.GuildID = guildID
-
-			cmd := &setCharacterCmd{session: cmdCtx.Session, imageClient: cmdCtx.ImageClient, synthesizer: cmdCtx.Synthesizer, audit: cmdCtx.Audit}
-			err := cmd.Execute(context.Background(), s, i)
-
-			if err == nil {
-				t.Error("Expected error for analysis failure, got nil")
-			}
-			if !strings.Contains(capturedContent, tt.expectedString) {
-				t.Errorf("Expected response to contain %q, got %q", tt.expectedString, capturedContent)
-			}
-		})
-	}
-}
-
-func TestSetCharacterCmd_SynthesisFailures(t *testing.T) {
-	tests := []struct {
-		name           string
-		status         string
-		ambiguities    []string
-		expectedString string
-	}{
-		{"Unknown", "UNKNOWN", nil, "I couldn't find any reliable information"},
-		{"Ambiguous", "AMBIGUOUS", []string{"Char A", "Char B"}, "I found multiple characters"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cmdCtx, s, dbPath := setupCommandTest(t)
-			defer os.Remove(dbPath)
-
-			guildID := "guild1"
-			userInput := "Some Input"
-
-			mockSynth := &mockSynthesizer{
-				AnalyzeInputFn: func(ctx context.Context, input string) (*research.AnalysisResult, string, string, error) {
-					return &research.AnalysisResult{
-						Status:       "OK",
-						OfficialName: "Official",
-						DisplayName:  "Display",
-					}, "reasoning", "raw", nil
-				},
-				FetchCharacterFn: func(ctx context.Context, analysis *research.AnalysisResult) (*research.SynthesisResult, error) {
-					return &research.SynthesisResult{
-						Status:      tt.status,
-						Ambiguities: tt.ambiguities,
-					}, nil
-				},
-			}
-			cmdCtx.Synthesizer = mockSynth
-
-			var capturedContent string
-			s.InteractionResponseEditFn = func(interaction *discordgo.Interaction, edit *discordgo.WebhookEdit) (*discordgo.Message, error) {
-				capturedContent = *edit.Content
-				return nil, nil
-			}
-
-			i := &discordgo.InteractionCreate{
-				Interaction: &discordgo.Interaction{
-					Type: discordgo.InteractionApplicationCommand,
-					Data: discordgo.ApplicationCommandInteractionData{
-						Options: []*discordgo.ApplicationCommandInteractionDataOption{
-							{
-								Name:  "prompt",
-								Value: userInput,
-								Type:  discordgo.ApplicationCommandOptionString,
-							},
-						},
-					},
-				},
-			}
-			i.GuildID = guildID
-
-			cmd := &setCharacterCmd{session: cmdCtx.Session, imageClient: cmdCtx.ImageClient, synthesizer: cmdCtx.Synthesizer, audit: cmdCtx.Audit}
-			err := cmd.Execute(context.Background(), s, i)
-
-			if err == nil {
-				t.Error("Expected error for synthesis failure, got nil")
-			}
-			if !strings.Contains(capturedContent, tt.expectedString) {
-				t.Errorf("Expected response to contain %q, got %q", tt.expectedString, capturedContent)
-			}
-		})
-	}
-}
-
-func TestSetCharacterCmd_ImageSearchFailures(t *testing.T) {
-	tests := []struct {
-		name           string
-		searchFn       func(ctx context.Context, query string, limit int) ([]search.Image, error)
-		expectedString string
-	}{
-		{
-			name: "No Results",
-			searchFn: func(ctx context.Context, query string, limit int) ([]search.Image, error) {
-				return []search.Image{}, nil
-			},
-			expectedString: "Character set to **Display Name**!",
-		},
-		{
-			name: "Search Error",
-			searchFn: func(ctx context.Context, query string, limit int) ([]search.Image, error) {
-				return nil, fmt.Errorf("search error")
-			},
-			expectedString: "Character set to **Display Name**!",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cmdCtx, s, dbPath := setupCommandTest(t)
-			defer os.Remove(dbPath)
-
-			guildID := "guild1"
-			userInput := "Character Name"
-
-			mockSynth := &mockSynthesizer{
-				AnalyzeInputFn: func(ctx context.Context, input string) (*research.AnalysisResult, string, string, error) {
-					return &research.AnalysisResult{
-						Status:       "OK",
-						OfficialName: "Official",
-						DisplayName:  "Display Name",
-					}, "reasoning", "raw", nil
-				},
-				FetchCharacterFn: func(ctx context.Context, analysis *research.AnalysisResult) (*research.SynthesisResult, error) {
-					return &research.SynthesisResult{
-						Status:      "OK",
-						PersonaSpec: "Persona",
-					}, nil
-				},
-			}
-			cmdCtx.Synthesizer = mockSynth
-
-			mockImg := &mockImageClient{
-				SearchImagesFn: tt.searchFn,
-			}
-			cmdCtx.ImageClient = mockImg
-
-			var capturedContent string
-			s.InteractionResponseEditFn = func(interaction *discordgo.Interaction, edit *discordgo.WebhookEdit) (*discordgo.Message, error) {
-				capturedContent = *edit.Content
-				return nil, nil
-			}
-			s.GuildMemberNicknameFn = func(guildID string, member string, nickname string) error {
-				return nil
-			}
-
-			i := &discordgo.InteractionCreate{
-				Interaction: &discordgo.Interaction{
-					Type: discordgo.InteractionApplicationCommand,
-					Data: discordgo.ApplicationCommandInteractionData{
-						Options: []*discordgo.ApplicationCommandInteractionDataOption{
-							{
-								Name:  "prompt",
-								Value: userInput,
-								Type:  discordgo.ApplicationCommandOptionString,
-							},
-						},
-					},
-				},
-			}
-			i.GuildID = guildID
-
-			cmd := &setCharacterCmd{session: cmdCtx.Session, imageClient: cmdCtx.ImageClient, synthesizer: cmdCtx.Synthesizer, audit: cmdCtx.Audit}
-			err := cmd.Execute(context.Background(), s, i)
-
-			if err != nil && tt.name == "No Results" {
-				t.Errorf("Unexpected error for No Results: %v", err)
-			}
-			if !strings.Contains(capturedContent, tt.expectedString) {
-				t.Errorf("Expected response to contain %q, got %q", tt.expectedString, capturedContent)
-			}
-		})
-	}
-}
-
-func TestHandleSetCharacterImage_EdgeCases(t *testing.T) {
-	tests := []struct {
-		name           string
-		candidates     []string
-		values         []string
-		expectedString string
-	}{
-		{"Empty Candidates", []string{}, []string{"0"}, responses.SetCharacter.ImageExpired},
-		{"Invalid Index", []string{"url1"}, []string{"1"}, responses.SetCharacter.ImageInvalid},
-		{"Invalid Index Neg", []string{"url1"}, []string{"-1"}, responses.SetCharacter.ImageInvalid},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cmdCtx, s, dbPath := setupCommandTest(t)
-			defer os.Remove(dbPath)
-
-			guildID := "guild1"
-			sm := cmdCtx.Session
-			sm.SaveImageCandidates(context.Background(), guildID, tt.candidates)
-
-			var capturedContent string
-			s.InteractionRespondFn = func(interaction *discordgo.Interaction, response *discordgo.InteractionResponse) error {
-				capturedContent = response.Data.Content
-				return nil
-			}
-
-			i := &discordgo.InteractionCreate{
-				Interaction: &discordgo.Interaction{
-					Type: discordgo.InteractionMessageComponent,
-					Data: discordgo.MessageComponentInteractionData{
-						CustomID: "select_char_image",
-						Values:   tt.values,
-					},
-				},
-			}
-			i.GuildID = guildID
-
-			(&setCharacterCmd{session: cmdCtx.Session, imageClient: cmdCtx.ImageClient}).handleImageSelection(context.Background(), s, i)
-
-			if !strings.Contains(capturedContent, tt.expectedString) {
-				t.Errorf("Expected response to contain %q, got %q", tt.expectedString, capturedContent)
-			}
-		})
-	}
-}
-
-func TestHandleSetCharacterImage_Success(t *testing.T) {
+func TestSetCharacterCmd_ActivateAmbiguous(t *testing.T) {
 	cmdCtx, s, dbPath := setupCommandTest(t)
 	defer os.Remove(dbPath)
 
 	guildID := "guild1"
-	charID := "char123"
-	selectedURL := "http://example.com/img.jpg"
-	imagePath := "/tmp/img.jpg"
-	base64Img := "data:image/jpeg;base64,abc"
-
-	// Setup character and image candidates
-	sm := cmdCtx.Session
-	sm.SaveCharacterCard(context.Background(), guildID, &session.CharacterCard{
-		CharacterID: charID,
-		DisplayName: "Test Character",
-	}, []string{})
-	sm.SetActiveCharacter(context.Background(), guildID, charID)
-	sm.SetCharacterImage(context.Background(), guildID, charID, selectedURL)
-	sm.SaveImageCandidates(context.Background(), guildID, []string{selectedURL})
-
-	// Mock Image Client
-	mockImg := &mockImageClient{
-		SaveImageFn: func(ctx context.Context, guildID, characterID, url string) (string, error) {
-			return imagePath, nil
-		},
-		ImageToBase64Fn: func(ctx context.Context, path string) (string, error) {
-			return base64Img, nil
-		},
+	for _, id := range []string{"char1", "char2"} {
+		cmdCtx.Session.SaveCharacterCard(context.Background(), guildID, &session.CharacterCard{
+			CharacterID:  id,
+			DisplayName:  "Twin",
+			OfficialName: "Twin One",
+		})
+		cmdCtx.Session.SaveCharacterCard(context.Background(), guildID, &session.CharacterCard{
+			CharacterID:  id + "x",
+			DisplayName:  "Twin",
+			OfficialName: "Twin Two",
+		})
 	}
-	cmdCtx.ImageClient = mockImg
 
-	// Mock Session for Avatar Update
+	var capturedContent string
 	s.InteractionRespondFn = func(interaction *discordgo.Interaction, response *discordgo.InteractionResponse) error {
+		capturedContent = response.Data.Content
 		return nil
 	}
-	s.GetTokenFn = func() string {
-		return "mock-token"
+
+	cmd := &setCharacterCmd{session: cmdCtx.Session, imageClient: cmdCtx.ImageClient}
+	if err := cmd.Execute(context.Background(), s, newSetInteraction(guildID, "twin")); err != nil {
+		t.Fatalf("Execute failed: %v", err)
 	}
-
-	i := &discordgo.InteractionCreate{
-		Interaction: &discordgo.Interaction{
-			Type:    discordgo.InteractionMessageComponent,
-			GuildID: guildID,
-			Message: &discordgo.Message{
-				GuildID: guildID,
-			},
-			Data: discordgo.MessageComponentInteractionData{
-				CustomID: "select_char_image",
-				Values:   []string{"0"},
-			},
-		},
+	if !strings.Contains(capturedContent, "Multiple saved characters match") {
+		t.Errorf("Expected ambiguity message, got %q", capturedContent)
 	}
-
-	(&setCharacterCmd{session: cmdCtx.Session, imageClient: cmdCtx.ImageClient}).handleImageSelection(context.Background(), s, i)
-
-	// Verify candidates are cleared
-	candidates, _ := sm.GetImageCandidates(context.Background(), guildID)
-	if len(candidates) != 0 {
-		t.Errorf("Expected image candidates to be cleared, got %v", candidates)
+	if !strings.Contains(capturedContent, "Twin (char1)") || !strings.Contains(capturedContent, "Twin (char2x)") {
+		t.Errorf("Expected candidates annotated with their IDs, got %q", capturedContent)
 	}
 }

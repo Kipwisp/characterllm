@@ -33,8 +33,8 @@ type imagePart struct {
 }
 
 type contentPart struct {
-	Type     string         `json:"type"`
-	Text     string         `json:"text,omitempty"`
+	Type     string     `json:"type"`
+	Text     string     `json:"text,omitempty"`
 	ImageURL *imagePart `json:"image_url,omitempty"`
 }
 
@@ -87,7 +87,7 @@ func (w llamaMessage) text() string {
 // LlamaRequest is the payload sent to the LLM server for a completion request.
 type LlamaRequest struct {
 	Messages []llamaMessage `json:"messages"`
-	Model    string        `json:"model"`
+	Model    string         `json:"model"`
 }
 
 // LlamaResponse is the JSON response received from a LLM request.

@@ -14,7 +14,7 @@ import (
 // historyPageSize is the number of history messages fetched and estimated per batch.
 const historyPageSize = 20
 
-// summaryPointer is injected at the [SUMMARY_CONTEXT] placeholder of the system prompt
+// summaryPointer is injected at the {{SUMMARY_CONTEXT}} placeholder of the system prompt
 // when a rolling summary is present; it instructs the model how to interpret the summary message.
 const summaryPointer = "The first user message in this conversation is a summary of earlier turns, provided for continuity. Treat it as context, not as something the user just said."
 
@@ -32,15 +32,26 @@ func NewPromptBuilder(llm llm.LLMClient, session *session.Manager, cfg *config.C
 	return &PromptBuilder{llm: llm, session: session, cfg: cfg, prompts: ps}
 }
 
-// buildSystemPrompt constructs the system message by injecting the character details
-// and, when a rolling summary is present, the summary pointer into the cached template.
+// buildSystemPrompt constructs the system message by injecting the character
+// identity and persona and, when a rolling summary is present, the summary
+// pointer into the cached template.
 func (p *PromptBuilder) buildSystemPrompt(details *session.CharacterDetails, hasSummary bool) llm.Message {
-	content := strings.Replace(p.prompts.System, "[CHARACTER_DETAILS]", details.Description, 1)
+	name := details.OfficialName
+	if name == "" {
+		name = details.DisplayName
+	}
+	identity := "You are the character named " + name
+	if details.Series != "" {
+		identity += " from the series " + details.Series
+	}
+	identity += "."
+	detailsBlock := identity + "\n\n" + details.Description
+	content := strings.Replace(p.prompts.System, "{{CHARACTER_DETAILS}}", detailsBlock, 1)
 	notice := ""
 	if hasSummary {
 		notice = "\n\n" + summaryPointer
 	}
-	content = strings.Replace(content, "[SUMMARY_CONTEXT]", notice, 1)
+	content = strings.Replace(content, "{{SUMMARY_CONTEXT}}", notice, 1)
 	return llm.Message{Role: "system", Content: content}
 }
 

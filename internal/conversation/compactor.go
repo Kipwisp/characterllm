@@ -129,13 +129,20 @@ func (c *Compactor) Compact(ctx context.Context, guildID, threadID, charID, reqI
 	logger.FromContext(ctx).Info("history compacted successfully", "guild_id", guildID, "messages_pruned", prunedCount)
 
 	// Log the compaction reasoning
-	c.audit.LogConversation(ctx, guildID, charID, "SYSTEM_COMPACTION", reasoning, summary, messagesToSummarize, latency, reqID)
+	c.audit.Log(ctx, guildID, threadID, charID, reqID, audit.Turn{
+		Kind:      audit.KindCompaction,
+		Model:     c.cfg.LLM.Model,
+		Latency:   latency,
+		Prompt:    fmt.Sprintf("rolling summary of %d messages", prunedCount),
+		Reasoning: reasoning,
+		Response:  summary,
+	})
 }
 
 // compactionPrompt injects the configured summary length limit into the cached template.
 func (c *Compactor) compactionPrompt() string {
 	maxWords := int(float64(c.cfg.LLM.SummaryMaxTokens) / tokensPerWord)
-	return strings.Replace(c.prompts.Compaction, "[LENGTH_LIMIT]", fmt.Sprintf("%d words", maxWords), 1)
+	return strings.Replace(c.prompts.Compaction, "{{LENGTH_LIMIT}}", fmt.Sprintf("%d words", maxWords), 1)
 }
 
 // tryStartCompaction claims the compaction slot for a conversation, returning false

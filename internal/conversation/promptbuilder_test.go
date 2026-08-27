@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"characterllm/internal/llm"
+	"characterllm/internal/session"
 )
 
 func TestBuild_BelowSoftTargetNotTriggered(t *testing.T) {
@@ -192,5 +193,57 @@ func TestBuild_SummaryIncludedBeforeHistory(t *testing.T) {
 	}
 	if messages[2].Content != "Msg 0" || messages[7].Content != "Msg 5" {
 		t.Errorf("Expected history after the summary, got %q ... %q", messages[2].Content, messages[7].Content)
+	}
+}
+
+func TestBuild_SystemPromptIdentityLine(t *testing.T) {
+	cases := []struct {
+		name         string
+		officialName string
+		displayName  string
+		series       string
+		wantIdentity string
+	}{
+		{
+			"official name and series",
+			"Miles G. Morales",
+			"Young Miles",
+			"Marvel",
+			"You are the character named Miles G. Morales from the series Marvel.",
+		},
+		{
+			"official name without series",
+			"Miles Morales",
+			"Miles Morales",
+			"",
+			"You are the character named Miles Morales.",
+		},
+		{
+			"official name missing falls back to display name",
+			"",
+			"Miles Morales",
+			"Spider-Verse",
+			"You are the character named Miles Morales from the series Spider-Verse.",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := setupConversation(t)
+
+			b := NewPromptBuilder(f.llm, f.sm, f.cfg, f.ps)
+			msg := b.buildSystemPrompt(&session.CharacterDetails{
+				CharacterID:  "c1",
+				OfficialName: tc.officialName,
+				DisplayName:  tc.displayName,
+				Series:       tc.series,
+				Description:  "### Identity & Temperament\nBrave.",
+			}, false)
+
+			want := tc.wantIdentity + "\n\n### Identity & Temperament\nBrave. is a helpful bot."
+			if msg.Content != want {
+				t.Errorf("system prompt = %q, want %q", msg.Content, want)
+			}
+		})
 	}
 }

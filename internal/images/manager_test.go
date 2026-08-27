@@ -14,8 +14,8 @@ import (
 	"strings"
 	"testing"
 
-	"characterllm/internal/search"
 	"characterllm/internal/safehttp"
+	"characterllm/internal/search"
 )
 
 func TestNewImageClient(t *testing.T) {

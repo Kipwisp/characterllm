@@ -28,21 +28,24 @@ func (h *Router) InteractionCreate(s *discordgo.Session, i *discordgo.Interactio
 }
 
 func (h *Router) handleInteraction(s commands.DiscordSession, i *discordgo.InteractionCreate) {
-	if i.Type != discordgo.InteractionApplicationCommand {
-		return
-	}
-
 	// Initialize request tracking
 	reqID := uuid.New().String()
 	ctx := logger.ToContext(context.Background(), logger.WithRequestID(reqID, "guild_id", i.GuildID))
 
-	name := i.ApplicationCommandData().Name
-	if err := h.CommandRegistry.Execute(ctx, name, s, i); err != nil {
-		if errors.Is(err, commands.ErrUnknownCommand) {
-			logger.FromContext(ctx).Warn("unknown command", "command", name)
-		} else {
-			logger.FromContext(ctx).Error("error executing command", "command", name, "error", err)
+	switch i.Type {
+	case discordgo.InteractionApplicationCommand:
+		name := i.ApplicationCommandData().Name
+		if err := h.CommandRegistry.Execute(ctx, name, s, i); err != nil {
+			if errors.Is(err, commands.ErrUnknownCommand) {
+				logger.FromContext(ctx).Warn("unknown command", "command", name)
+			} else {
+				logger.FromContext(ctx).Error("error executing command", "command", name, "error", err)
+			}
 		}
+	case discordgo.InteractionApplicationCommandAutocomplete:
+		h.CommandRegistry.HandleAutocomplete(ctx, s, i)
+	default:
+		return
 	}
 }
 

@@ -57,7 +57,7 @@ func setupConversation(t *testing.T) *fixtures {
 		CharacterID: "char1",
 		DisplayName: "TestChar",
 		Description: "A test character",
-	}, []string{}); err != nil {
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := sm.SetActiveCharacter(ctx, testGuildID, "char1"); err != nil {
@@ -78,10 +78,10 @@ func setupConversation(t *testing.T) *fixtures {
 		cfg:   cfg,
 		llm:   &mockLLMClient{},
 		sm:    sm,
-		audit: audit.NewAuditLogger(tmpLogDir),
+		audit: audit.NewAuditLogger(tmpLogDir, true),
 		ps: &prompts.Set{
-			System:     "[CHARACTER_DETAILS] is a helpful bot.[SUMMARY_CONTEXT]",
-			Compaction: "Summarize the following: [LENGTH_LIMIT]",
+			System:     "{{CHARACTER_DETAILS}} is a helpful bot.{{SUMMARY_CONTEXT}}",
+			Compaction: "Summarize the following: {{LENGTH_LIMIT}}",
 		},
 	}
 }

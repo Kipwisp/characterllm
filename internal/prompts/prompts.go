@@ -8,14 +8,15 @@ import (
 
 // Set holds all prompt templates used by the bot, cached for the process lifetime.
 type Set struct {
-	System     string
-	Compaction string
-	Synthesis  string
-	Analyzer   string
+	System      string
+	Compaction  string
+	Synthesis   string
+	Analyzer    string
+	EditSection string
 }
 
 // Load reads every prompt file into memory.
-func Load(systemPath, compactionPath, synthesisPath, analyzerPath string) (*Set, error) {
+func Load(systemPath, compactionPath, synthesisPath, analyzerPath, editSectionPath string) (*Set, error) {
 	set := &Set{}
 	entries := []struct {
 		name string
@@ -26,6 +27,7 @@ func Load(systemPath, compactionPath, synthesisPath, analyzerPath string) (*Set,
 		{"compaction", compactionPath, &set.Compaction},
 		{"synthesis", synthesisPath, &set.Synthesis},
 		{"analyzer", analyzerPath, &set.Analyzer},
+		{"edit section", editSectionPath, &set.EditSection},
 	}
 
 	for _, e := range entries {

@@ -88,7 +88,7 @@ func (c *Chat) Handle(s commands.DiscordSession, m *discordgo.MessageCreate) {
 	}
 
 	// Generate and send response
-	if err := c.processChat(ctx, s, m, details.CharacterID, prompt, messages, reqID); err != nil {
+	if err := c.processChat(ctx, s, m, "", details.CharacterID, prompt, messages, reqID); err != nil {
 		logger.FromContext(ctx).Error("error processing chat", "error", err)
 	}
 
@@ -168,7 +168,7 @@ func (c *Chat) getActiveCharacter(ctx context.Context, guildID string) (*session
 }
 
 // processChat handles the core cycle of generating an LLM response, logging it, and sending it to Discord.
-func (c *Chat) processChat(ctx context.Context, s commands.DiscordSession, m *discordgo.MessageCreate, charID string, prompt string, messages []llm.Message, reqID string) error {
+func (c *Chat) processChat(ctx context.Context, s commands.DiscordSession, m *discordgo.MessageCreate, threadID, charID string, prompt string, messages []llm.Message, reqID string) error {
 	start := time.Now()
 	// Generate response
 	fullResponse, reasoning, err := c.LLM.GenerateResponse(ctx, messages, c.Config.LLM.Model)
@@ -180,7 +180,19 @@ func (c *Chat) processChat(ctx context.Context, s commands.DiscordSession, m *di
 	latency := time.Since(start)
 
 	// Log the raw response (including any image notes) for debugging
-	c.Audit.LogConversation(ctx, m.GuildID, charID, prompt, reasoning, fullResponse, messages, latency, reqID)
+	system := ""
+	if len(messages) > 0 && messages[0].Role == "system" {
+		system = messages[0].Content
+	}
+	c.Audit.Log(ctx, m.GuildID, threadID, charID, reqID, audit.Turn{
+		Kind:      audit.KindChat,
+		Model:     c.Config.LLM.Model,
+		Latency:   latency,
+		System:    system,
+		Prompt:    prompt,
+		Reasoning: reasoning,
+		Response:  fullResponse,
+	})
 
 	visible, imageNotes := splitImageNotes(fullResponse)
 	if visible == "" {

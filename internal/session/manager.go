@@ -21,18 +21,17 @@ type CharacterCard struct {
 	Series       string
 	DisplayName  string
 	Description  string
-	SourceURL    string
-	Modifiers    string
-	Scenario     string
 	ImageURL     string
 }
 
 // CharacterDetails represents the active character persona for a guild.
 type CharacterDetails struct {
-	CharacterID string
-	DisplayName string
-	Description string
-	ImageURL    string
+	CharacterID  string
+	OfficialName string
+	DisplayName  string
+	Series       string
+	Description  string
+	ImageURL     string
 }
 
 // Manager handles the persistence and retrieval of character data and conversation history for Discord guilds.
@@ -70,7 +69,7 @@ func (m *Manager) GetCharacterCard(ctx context.Context, guildID, characterID str
 	defer m.mu.RUnlock()
 
 	var card CharacterCard
-	err := m.db.QueryRow("SELECT guild_id, character_id, COALESCE(official_name, ''), COALESCE(series, ''), COALESCE(display_name, ''), COALESCE(description, ''), COALESCE(source_url, ''), COALESCE(modifiers, ''), COALESCE(scenario, ''), COALESCE(image_url, '') FROM character_cards WHERE guild_id = ? AND character_id = ?", guildID, characterID).Scan(&card.GuildID, &card.CharacterID, &card.OfficialName, &card.Series, &card.DisplayName, &card.Description, &card.SourceURL, &card.Modifiers, &card.Scenario, &card.ImageURL)
+	err := m.db.QueryRow("SELECT guild_id, character_id, COALESCE(official_name, ''), COALESCE(series, ''), COALESCE(display_name, ''), COALESCE(description, ''), COALESCE(image_url, '') FROM character_cards WHERE guild_id = ? AND character_id = ?", guildID, characterID).Scan(&card.GuildID, &card.CharacterID, &card.OfficialName, &card.Series, &card.DisplayName, &card.Description, &card.ImageURL)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -81,31 +80,8 @@ func (m *Manager) GetCharacterCard(ctx context.Context, guildID, characterID str
 	return &card, nil
 }
 
-// GetCardByAlias retrieves a character card using a known alias for a specific guild.
-func (m *Manager) GetCardByAlias(ctx context.Context, guildID, alias string) (*CharacterCard, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	var characterID string
-	err := m.db.QueryRow("SELECT character_id FROM character_aliases WHERE guild_id = ? AND alias = ?", guildID, alias).Scan(&characterID)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("failed to resolve alias %s for guild %s: %w", alias, guildID, err)
-	}
-
-	var card CharacterCard
-	err = m.db.QueryRow("SELECT guild_id, character_id, COALESCE(official_name, ''), COALESCE(series, ''), COALESCE(display_name, ''), COALESCE(description, ''), COALESCE(source_url, ''), COALESCE(modifiers, ''), COALESCE(scenario, ''), COALESCE(image_url, '') FROM character_cards WHERE guild_id = ? AND character_id = ?", guildID, characterID).Scan(&card.GuildID, &card.CharacterID, &card.OfficialName, &card.Series, &card.DisplayName, &card.Description, &card.SourceURL, &card.Modifiers, &card.Scenario, &card.ImageURL)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load card for alias %s in guild %s: %w", alias, guildID, err)
-	}
-
-	return &card, nil
-}
-
-// SaveCharacterCard persists a guild-specific character card and its aliases.
-func (m *Manager) SaveCharacterCard(ctx context.Context, guildID string, card *CharacterCard, aliases []string) error {
+// SaveCharacterCard persists a guild-specific character card.
+func (m *Manager) SaveCharacterCard(ctx context.Context, guildID string, card *CharacterCard) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -115,17 +91,35 @@ func (m *Manager) SaveCharacterCard(ctx context.Context, guildID string, card *C
 	}
 	defer tx.Rollback()
 
-	_, err = tx.Exec("INSERT INTO character_cards (guild_id, character_id, official_name, series, display_name, description, source_url, modifiers, scenario) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(guild_id, character_id) DO UPDATE SET official_name = ?, display_name = ?, description = ?, source_url = ?, modifiers = ?, scenario = ?",
-		guildID, card.CharacterID, card.OfficialName, card.Series, card.DisplayName, card.Description, card.SourceURL, card.Modifiers, card.Scenario, card.OfficialName, card.DisplayName, card.Description, card.SourceURL, card.Modifiers, card.Scenario)
+	_, err = tx.Exec("INSERT INTO character_cards (guild_id, character_id, official_name, series, display_name, description) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(guild_id, character_id) DO UPDATE SET official_name = ?, series = ?, display_name = ?, description = ?",
+		guildID, card.CharacterID, card.OfficialName, card.Series, card.DisplayName, card.Description, card.OfficialName, card.Series, card.DisplayName, card.Description)
 	if err != nil {
 		return fmt.Errorf("failed to save character card %s for guild %s: %w", card.CharacterID, guildID, err)
 	}
 
-	for _, alias := range aliases {
-		_, err = tx.Exec("INSERT INTO character_aliases (guild_id, alias, character_id) VALUES (?, ?, ?) ON CONFLICT(guild_id, alias) DO UPDATE SET character_id = ?",
-			guildID, alias, card.CharacterID, card.CharacterID)
-		if err != nil {
-			return fmt.Errorf("failed to save alias %s for guild %s: %w", alias, guildID, err)
+	return tx.Commit()
+}
+
+// DeleteCharacterCard removes a character card, its chat history, and its
+// rolling summaries in one transaction. Deleting an unknown character is a
+// no-op.
+func (m *Manager) DeleteCharacterCard(ctx context.Context, guildID, characterID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	tx, err := m.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	for _, q := range []string{
+		"DELETE FROM chat_history WHERE guild_id = ? AND character_id = ?",
+		"DELETE FROM conversation_summaries WHERE guild_id = ? AND character_id = ?",
+		"DELETE FROM character_cards WHERE guild_id = ? AND character_id = ?",
+	} {
+		if _, err := tx.Exec(q, guildID, characterID); err != nil {
+			return fmt.Errorf("failed to delete character card %s for guild %s: %w", characterID, guildID, err)
 		}
 	}
 
@@ -137,7 +131,7 @@ func (m *Manager) GetGuildCharacters(ctx context.Context, guildID string) ([]*Ch
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	rows, err := m.db.Query("SELECT guild_id, character_id, COALESCE(official_name, ''), COALESCE(series, ''), COALESCE(display_name, ''), COALESCE(description, ''), COALESCE(source_url, ''), COALESCE(modifiers, ''), COALESCE(scenario, ''), COALESCE(image_url, '') FROM character_cards WHERE guild_id = ?", guildID)
+	rows, err := m.db.Query("SELECT guild_id, character_id, COALESCE(official_name, ''), COALESCE(series, ''), COALESCE(display_name, ''), COALESCE(description, ''), COALESCE(image_url, '') FROM character_cards WHERE guild_id = ?", guildID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to retrieve characters for guild %s: %w", guildID, err)
 	}
@@ -146,7 +140,7 @@ func (m *Manager) GetGuildCharacters(ctx context.Context, guildID string) ([]*Ch
 	var cards []*CharacterCard
 	for rows.Next() {
 		var card CharacterCard
-		if err := rows.Scan(&card.GuildID, &card.CharacterID, &card.OfficialName, &card.Series, &card.DisplayName, &card.Description, &card.SourceURL, &card.Modifiers, &card.Scenario, &card.ImageURL); err != nil {
+		if err := rows.Scan(&card.GuildID, &card.CharacterID, &card.OfficialName, &card.Series, &card.DisplayName, &card.Description, &card.ImageURL); err != nil {
 			return nil, fmt.Errorf("failed to scan character card for guild %s: %w", guildID, err)
 		}
 		cards = append(cards, &card)
@@ -173,19 +167,9 @@ func (m *Manager) initDB() error {
 			series TEXT,
 			display_name TEXT,
 			description TEXT,
-			source_url TEXT,
-			modifiers TEXT,
-			scenario TEXT,
 			image_url TEXT DEFAULT '',
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			PRIMARY KEY (guild_id, character_id)
-		);`,
-		`CREATE TABLE IF NOT EXISTS character_aliases (
-			guild_id TEXT,
-			alias TEXT,
-			character_id TEXT,
-			PRIMARY KEY (guild_id, alias),
-			FOREIGN KEY (guild_id, character_id) REFERENCES character_cards(guild_id, character_id)
 		);`,
 		`CREATE TABLE IF NOT EXISTS chat_history (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -364,10 +348,10 @@ func (m *Manager) GetCharacterDetails(ctx context.Context, guildID string) (*Cha
 
 	var details CharacterDetails
 	err := m.db.QueryRow(`
-		SELECT s.active_character_id, c.display_name, c.description, COALESCE(c.image_url, '')
+		SELECT s.active_character_id, COALESCE(c.official_name, ''), c.display_name, COALESCE(c.series, ''), c.description, COALESCE(c.image_url, '')
 		FROM guild_config s
 		JOIN character_cards c ON s.active_character_id = c.character_id
-		WHERE s.guild_id = ?`, guildID).Scan(&details.CharacterID, &details.DisplayName, &details.Description, &details.ImageURL)
+		WHERE s.guild_id = ?`, guildID).Scan(&details.CharacterID, &details.OfficialName, &details.DisplayName, &details.Series, &details.Description, &details.ImageURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get character details for guild %s: %w", guildID, err)
 	}
@@ -409,6 +393,20 @@ func (m *Manager) GetHistoryCount(ctx context.Context, guildID, threadID string)
 	err := m.db.QueryRow("SELECT COUNT(*) FROM chat_history WHERE guild_id = ? AND character_id = ? AND thread_id = ?", guildID, charID, threadID).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get history count for guild %s, thread %s: %w", guildID, threadID, err)
+	}
+	return count, nil
+}
+
+// CountCharacterThreads returns the number of distinct threads with chat
+// history stored for a single character.
+func (m *Manager) CountCharacterThreads(ctx context.Context, guildID, characterID string) (int, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var count int
+	err := m.db.QueryRow("SELECT COUNT(DISTINCT thread_id) FROM chat_history WHERE guild_id = ? AND character_id = ?", guildID, characterID).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count history for character %s in guild %s: %w", characterID, guildID, err)
 	}
 	return count, nil
 }

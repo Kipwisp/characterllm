@@ -18,6 +18,7 @@ type mockLLMClient = mocks.MockLLMClient
 type mockSynthesizer struct {
 	AnalyzeInputFn   func(ctx context.Context, input string) (*research.AnalysisResult, string, string, error)
 	FetchCharacterFn func(ctx context.Context, analysis *research.AnalysisResult) (*research.SynthesisResult, error)
+	RewriteSectionFn func(ctx context.Context, req research.SectionRewriteRequest) (*research.SectionRewriteResult, error)
 }
 
 func (m *mockSynthesizer) AnalyzeInput(ctx context.Context, input string) (*research.AnalysisResult, string, string, error) {
@@ -32,6 +33,13 @@ func (m *mockSynthesizer) FetchCharacter(ctx context.Context, analysis *research
 		return nil, nil
 	}
 	return m.FetchCharacterFn(ctx, analysis)
+}
+
+func (m *mockSynthesizer) RewriteSection(ctx context.Context, req research.SectionRewriteRequest) (*research.SectionRewriteResult, error) {
+	if m.RewriteSectionFn == nil {
+		return nil, nil
+	}
+	return m.RewriteSectionFn(ctx, req)
 }
 
 type mockImageClient = mocks.MockImageClient

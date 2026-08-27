@@ -62,11 +62,11 @@ func NewEnv(t *testing.T) *Env {
 
 	return &Env{
 		Session: sm,
-		Audit:   audit.NewAuditLogger(t.TempDir()),
+		Audit:   audit.NewAuditLogger(t.TempDir(), true),
 		Config:  cfg,
 		Prompts: &prompts.Set{
-			System:     "[CHARACTER_DETAILS] is a helpful bot.[SUMMARY_CONTEXT]",
-			Compaction: "Summarize the following: [LENGTH_LIMIT]",
+			System:     "{{CHARACTER_DETAILS}} is a helpful bot.{{SUMMARY_CONTEXT}}",
+			Compaction: "Summarize the following: {{LENGTH_LIMIT}}",
 		},
 		LLM:    &mocks.MockLLMClient{},
 		DBPath: tmpDbName,

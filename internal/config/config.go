@@ -42,10 +42,11 @@ type LLMConfig struct {
 }
 
 type PromptConfig struct {
-	SystemPath     string
-	CompactionPath string
-	SynthesisPath  string
-	AnalyzerPath   string
+	SystemPath      string
+	CompactionPath  string
+	SynthesisPath   string
+	AnalyzerPath    string
+	EditSectionPath string
 }
 
 type ImageConfig struct {
@@ -59,6 +60,8 @@ type GeneralConfig struct {
 	LogLevel     string
 	TopicRate    string
 	BirthdayHour string
+	// ConversationLog toggles the per-guild conversation audit files.
+	ConversationLog bool
 }
 
 // LoadConfig loads configuration from .env file and environment variables.
@@ -85,10 +88,11 @@ func LoadConfig() *Config {
 			MaxImages:           getEnvInt("LLM_MAX_IMAGES", 2),
 		},
 		Prompts: PromptConfig{
-			SystemPath:     getEnv("SYSTEM_PROMPT_PATH", "prompts/system_prompt.md"),
-			CompactionPath: getEnv("COMPACTION_PROMPT_PATH", "prompts/compaction_prompt.md"),
-			SynthesisPath:  getEnv("SYNTHESIS_PROMPT_PATH", "prompts/synthesis_prompt.md"),
-			AnalyzerPath:   getEnv("ANALYZER_PROMPT_PATH", "prompts/analyzer_prompt.md"),
+			SystemPath:      getEnv("SYSTEM_PROMPT_PATH", "prompts/system_prompt.md"),
+			CompactionPath:  getEnv("COMPACTION_PROMPT_PATH", "prompts/compaction_prompt.md"),
+			SynthesisPath:   getEnv("SYNTHESIS_PROMPT_PATH", "prompts/synthesis_prompt.md"),
+			AnalyzerPath:    getEnv("ANALYZER_PROMPT_PATH", "prompts/analyzer_prompt.md"),
+			EditSectionPath: getEnv("EDIT_SECTION_PROMPT_PATH", "prompts/edit_section_prompt.md"),
 		},
 		Images: ImageConfig{
 			Provider:   getEnv("IMAGE_PROVIDER", "searxng"),
@@ -97,9 +101,10 @@ func LoadConfig() *Config {
 			CacheDir:   getEnv("IMAGE_CACHE_DIR", "images/cache"),
 		},
 		General: GeneralConfig{
-			LogLevel:     getEnv("LOG_LEVEL", "INFO"),
-			TopicRate:    getEnv("TOPIC_RATE", "10000"),
-			BirthdayHour: getEnv("BIRTHDAY_HOUR", "12"),
+			LogLevel:        getEnv("LOG_LEVEL", "INFO"),
+			TopicRate:       getEnv("TOPIC_RATE", "10000"),
+			BirthdayHour:    getEnv("BIRTHDAY_HOUR", "12"),
+			ConversationLog: getEnvBool("CONVERSATION_LOG", true),
 		},
 	}
 }
