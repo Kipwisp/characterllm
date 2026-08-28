@@ -10,6 +10,20 @@ var (
 		Offline: "❌ LLM Server is unreachable: %v",
 	}
 
+	CreateCharacter = struct {
+		AnalysisFailed string
+		Unknown        string
+		Ambiguous      string
+		Injection      string
+		SelectPicture  string
+	}{
+		AnalysisFailed: "I had trouble understanding your request: %v",
+		Unknown:        "I couldn't find any reliable information on '%s'. Could you provide more details or the series they are from?",
+		Ambiguous:      "I found multiple characters named '%s':\n%s\nPlease be more specific!",
+		Injection:      "Nice try! I'm not falling for that prompt injection. Please provide a valid character name.",
+		SelectPicture:  "Please select a profile picture:",
+	}
+
 	SetCharacter = struct {
 		Creating             string
 		NotFound             string
@@ -39,11 +53,13 @@ var (
 		NotFound   string
 		SetError   string
 		SetSuccess string
+		SetDetail  string
 	}{
 		Empty:      "No saved character cards found for this guild. Use /createcharacter to create one!",
 		NotFound:   "The selected character card no longer exists or is unavailable.",
 		SetError:   "An error occurred while setting the character.",
 		SetSuccess: "Character set to **%s**!",
+	SetDetail:  "\nCharacter: %s",
 	}
 
 	CharacterResolution = struct {

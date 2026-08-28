@@ -21,6 +21,11 @@ type ImageClient interface {
 	// ImageToDataURI downloads the image at url, processes it, and returns it
 	// as a data URI suitable for a vision model. Nothing is written to disk.
 	ImageToDataURI(ctx context.Context, url string) (string, error)
+	// ComposeRow downloads each url, tiles up to limit successfully decoded
+	// images into a single horizontal row on a transparent background (urls
+	// that fail to fetch do not count against the limit), and returns the
+	// PNG-encoded row plus the urls that made it in, in row order.
+	ComposeRow(ctx context.Context, urls []string, limit int) ([]byte, []string, error)
 	// DeleteImage removes a character's cached image from disk.
 	DeleteImage(guildID, characterID string) error
 	GetCache() *ImageCache

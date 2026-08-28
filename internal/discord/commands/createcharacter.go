@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"strconv"
@@ -17,6 +18,14 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/google/uuid"
+)
+
+const (
+	// avatarSearchLimit is how many image candidates to search for.
+	avatarSearchLimit = 10
+
+	// avatarRowLimit is the maximum number of candidates shown in the row.
+	avatarRowLimit = 5
 )
 
 type createCharacterCmd struct {
@@ -99,7 +108,7 @@ func (c *createCharacterCmd) fetchAndSetupCharacter(ctx context.Context, s Disco
 	if err != nil {
 		logger.FromContext(ctx).Error("input analysis failed", "error", err)
 		s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
-			Content: utils.PtrString(fmt.Sprintf("I had trouble understanding your request: %v", err)),
+			Content: utils.PtrString(fmt.Sprintf(responses.CreateCharacter.AnalysisFailed, err)),
 		})
 		return nil, err
 	}
@@ -121,17 +130,17 @@ func (c *createCharacterCmd) fetchAndSetupCharacter(ctx context.Context, s Disco
 	switch analysis.Status {
 	case research.AnalysisStatusUnknown:
 		s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
-			Content: utils.PtrString(fmt.Sprintf("I couldn't find any reliable information on '%s'. Could you provide more details or the series they are from?", userInput)),
+			Content: utils.PtrString(fmt.Sprintf(responses.CreateCharacter.Unknown, userInput)),
 		})
 		return nil, fmt.Errorf("character unknown: %s", userInput)
 	case research.AnalysisStatusAmbiguous:
 		s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
-			Content: utils.PtrString(fmt.Sprintf("I found multiple characters named '%s':\n%s\nPlease be more specific!", userInput, strings.Join(analysis.Ambiguities, "\n"))),
+			Content: utils.PtrString(fmt.Sprintf(responses.CreateCharacter.Ambiguous, userInput, strings.Join(analysis.Ambiguities, "\n"))),
 		})
 		return nil, fmt.Errorf("character ambiguous: %s", userInput)
 	case research.AnalysisStatusInjection:
 		s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
-			Content: utils.PtrString("Nice try! I'm not falling for that prompt injection. Please provide a valid character name."),
+			Content: utils.PtrString(responses.CreateCharacter.Injection),
 		})
 		return nil, fmt.Errorf("prompt injection detected: %s", userInput)
 	case research.AnalysisStatusOK:
@@ -164,12 +173,12 @@ func (c *createCharacterCmd) fetchAndSetupCharacter(ctx context.Context, s Disco
 	switch res.Status {
 	case research.SynthesisStatusUnknown:
 		s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
-			Content: utils.PtrString(fmt.Sprintf("I couldn't find any reliable information on '%s'. Could you provide more details or the series they are from?", userInput)),
+			Content: utils.PtrString(fmt.Sprintf(responses.CreateCharacter.Unknown, userInput)),
 		})
 		return nil, fmt.Errorf("character unknown: %s", userInput)
 	case research.SynthesisStatusAmbiguous:
 		s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
-			Content: utils.PtrString(fmt.Sprintf("I found multiple characters named '%s':\n%s\nPlease be more specific!", userInput, strings.Join(res.Ambiguities, "\n"))),
+			Content: utils.PtrString(fmt.Sprintf(responses.CreateCharacter.Ambiguous, userInput, strings.Join(res.Ambiguities, "\n"))),
 		})
 		return nil, fmt.Errorf("character ambiguous: %s", userInput)
 	case research.SynthesisStatusOK:
@@ -208,7 +217,7 @@ func (c *createCharacterCmd) searchAndProcessImages(ctx context.Context, s Disco
 		logger.FromContext(ctx).Error("no image client available")
 		return fmt.Errorf("no image client available")
 	}
-	imgResults, err := c.imageClient.SearchImages(ctx, fmt.Sprintf("%s profile picture", card.DisplayName), 5)
+	imgResults, err := c.imageClient.SearchImages(ctx, fmt.Sprintf("%s profile picture", card.DisplayName), avatarSearchLimit)
 	if err != nil {
 		logger.FromContext(ctx).Warn("image search failed", "error", err)
 		_, errEdit := s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
@@ -233,29 +242,48 @@ func (c *createCharacterCmd) searchAndProcessImages(ctx context.Context, s Disco
 
 	logger.FromContext(ctx).Info("found images", "count", len(imgResults), "character", card.DisplayName)
 
-	var embeds []*discordgo.MessageEmbed
-	var options []discordgo.SelectMenuOption
 	var urls []string
-	for idx, img := range imgResults {
+	titles := make(map[string]string, len(imgResults))
+	for _, img := range imgResults {
 		urls = append(urls, img.URL)
+		titles[img.URL] = img.Title
+	}
 
-		embeds = append(embeds, &discordgo.MessageEmbed{
-			Title:       fmt.Sprintf("Option %d", idx+1),
-			Description: img.Title,
-			Image: &discordgo.MessageEmbedImage{
-				URL: img.URL,
-			},
+	// Download the candidates and tile them into a single row image. We
+	// Candidates that fail to fetch are skipped, so the row still fills
+	// up to avatarRowLimit options.
+	rowBytes, included, err := c.imageClient.ComposeRow(ctx, urls, avatarRowLimit)
+	if err != nil || len(included) == 0 {
+		logger.FromContext(ctx).Warn("no avatar options could be fetched", "error", err)
+		_, errEdit := s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
+			Content: utils.PtrString(formatCharacterSetMessage(card)),
 		})
+		if errEdit != nil {
+			logger.FromContext(ctx).Error("error editing interaction response after compose failure", "error", errEdit)
+		}
+		return nil
+	}
 
+	embeds := []*discordgo.MessageEmbed{
+		{
+			Title: "Avatar options",
+			Image: &discordgo.MessageEmbedImage{
+				URL: "attachment://avatar_options.png",
+			},
+		},
+	}
+
+	var options []discordgo.SelectMenuOption
+	for idx, url := range included {
 		options = append(options, discordgo.SelectMenuOption{
 			Label:       fmt.Sprintf("Option %d", idx+1),
 			Value:       strconv.Itoa(idx),
-			Description: utils.TruncateString(img.Title, MaxSelectMenuDescriptionLength),
+			Description: utils.TruncateString(titles[url], MaxSelectMenuDescriptionLength),
 		})
 	}
 
 	// Save candidates to session to retrieve them in HandleComponent
-	if err := c.session.SaveImageCandidates(ctx, i.GuildID, urls); err != nil {
+	if err := c.session.SaveImageCandidates(ctx, i.GuildID, included); err != nil {
 		logger.FromContext(ctx).Error("failed to save image candidates", "error", err, "guild_id", i.GuildID)
 	}
 
@@ -271,8 +299,9 @@ func (c *createCharacterCmd) searchAndProcessImages(ctx context.Context, s Disco
 	}
 
 	_, errEdit := s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
-		Content:    utils.PtrString(formatCharacterSetMessage(card) + "\n\nPlease select a profile picture from the options below:"),
+		Content:    utils.PtrString(formatCharacterSetMessage(card) + "\n\n" + responses.CreateCharacter.SelectPicture),
 		Embeds:     &embeds,
+		Files:      []*discordgo.File{{Name: "avatar_options.png", ContentType: "image/png", Reader: bytes.NewReader(rowBytes)}},
 		Components: &components,
 	})
 	if errEdit != nil {
@@ -424,17 +453,18 @@ func (c *createCharacterCmd) handleImageSelection(ctx context.Context, s Discord
 	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseUpdateMessage,
 		Data: &discordgo.InteractionResponseData{
-			Content:    formatCharacterSetMessage(card),
-			Embeds:     nil,
-			Components: nil,
+			Content:     formatCharacterSetMessage(card),
+			Embeds:      nil,
+			Attachments: &[]*discordgo.MessageAttachment{},
+			Components:  nil,
 		},
 	})
 }
 
 func formatCharacterSetMessage(card *session.CharacterCard) string {
-	message := fmt.Sprintf("Character set to **%s**!", card.DisplayName)
+	message := fmt.Sprintf(responses.ListCharacters.SetSuccess, card.DisplayName)
 	if card.OfficialName != "" {
-		message += fmt.Sprintf("\nCharacter: %s", card.OfficialName)
+		message += fmt.Sprintf(responses.ListCharacters.SetDetail, card.OfficialName)
 	}
 	return message
 }

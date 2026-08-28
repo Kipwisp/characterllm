@@ -15,6 +15,7 @@ type MockImageClient struct {
 	GetImageFn       func(guildID, characterID string) (string, error)
 	ImageToBase64Fn  func(ctx context.Context, path string) (string, error)
 	ImageToDataURIFn func(ctx context.Context, url string) (string, error)
+	ComposeRowFn     func(ctx context.Context, urls []string, limit int) ([]byte, []string, error)
 	DeleteImageFn    func(guildID, characterID string) error
 	GetCacheFn       func() *images.ImageCache
 }
@@ -52,6 +53,13 @@ func (m *MockImageClient) ImageToDataURI(ctx context.Context, url string) (strin
 		return "", nil
 	}
 	return m.ImageToDataURIFn(ctx, url)
+}
+
+func (m *MockImageClient) ComposeRow(ctx context.Context, urls []string, limit int) ([]byte, []string, error) {
+	if m.ComposeRowFn == nil {
+		return nil, nil, nil
+	}
+	return m.ComposeRowFn(ctx, urls, limit)
 }
 
 func (m *MockImageClient) DeleteImage(guildID, characterID string) error {

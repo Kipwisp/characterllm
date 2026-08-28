@@ -434,3 +434,144 @@ func TestHandleSetCharacterImage_Success(t *testing.T) {
 		t.Errorf("Expected image candidates to be cleared, got %v", candidates)
 	}
 }
+
+func runCreateCharacterWithImages(t *testing.T, cmdCtx *testDeps, s *mockDiscordSession, searchFn func(ctx context.Context, query string, limit int) ([]search.Image, error), composeFn func(ctx context.Context, urls []string, limit int) ([]byte, []string, error)) *discordgo.WebhookEdit {
+	t.Helper()
+	mockSynth := &mockSynthesizer{
+		AnalyzeInputFn: func(ctx context.Context, input string) (*research.AnalysisResult, string, string, error) {
+			return &research.AnalysisResult{
+				Status:       research.AnalysisStatusOK,
+				OfficialName: "Official",
+				DisplayName:  "Display Name",
+			}, "reasoning", "raw", nil
+		},
+		FetchCharacterFn: func(ctx context.Context, analysis *research.AnalysisResult) (*research.SynthesisResult, error) {
+			return &research.SynthesisResult{
+				Status:      research.SynthesisStatusOK,
+				PersonaSpec: "Persona",
+			}, nil
+		},
+	}
+	cmdCtx.Synthesizer = mockSynth
+	cmdCtx.ImageClient = &mockImageClient{
+		SearchImagesFn: searchFn,
+		ComposeRowFn:   composeFn,
+	}
+
+	var edit *discordgo.WebhookEdit
+	s.InteractionResponseEditFn = func(interaction *discordgo.Interaction, e *discordgo.WebhookEdit) (*discordgo.Message, error) {
+		edit = e
+		return nil, nil
+	}
+	s.GuildMemberNicknameFn = func(guildID string, member string, nickname string) error {
+		return nil
+	}
+
+	i := &discordgo.InteractionCreate{
+		Interaction: &discordgo.Interaction{
+			Type: discordgo.InteractionApplicationCommand,
+			Data: discordgo.ApplicationCommandInteractionData{
+				Options: []*discordgo.ApplicationCommandInteractionDataOption{
+					{Name: "description", Value: "Character Name", Type: discordgo.ApplicationCommandOptionString},
+				},
+			},
+		},
+	}
+	i.GuildID = "guild1"
+
+	cmd := &createCharacterCmd{session: cmdCtx.Session, imageClient: cmdCtx.ImageClient, synthesizer: cmdCtx.Synthesizer, audit: cmdCtx.Audit}
+	if err := cmd.Execute(context.Background(), s, i); err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+	return edit
+}
+
+func TestCreateCharacterCmd_AvatarOptionsRow(t *testing.T) {
+	cmdCtx, s, dbPath := setupCommandTest(t)
+	defer os.Remove(dbPath)
+
+	edit := runCreateCharacterWithImages(t, cmdCtx, s,
+		func(ctx context.Context, query string, limit int) ([]search.Image, error) {
+			return []search.Image{
+				{URL: "http://a", Title: "A"},
+				{URL: "http://b", Title: "B"},
+				{URL: "http://c", Title: "C"},
+			}, nil
+		},
+		func(ctx context.Context, urls []string, limit int) ([]byte, []string, error) {
+			// Simulate the third candidate failing to fetch.
+			return []byte("fake-png"), urls[:2], nil
+		},
+	)
+
+	if edit == nil {
+		t.Fatal("expected an interaction response edit")
+	}
+
+	if len(*edit.Embeds) != 1 {
+		t.Fatalf("expected exactly one embed, got %d", len(*edit.Embeds))
+	}
+	if e := (*edit.Embeds)[0]; e.Image == nil || e.Image.URL != "attachment://avatar_options.png" {
+		t.Errorf("expected embed to reference the row attachment, got %v", e.Image)
+	}
+	if len(edit.Files) != 1 || edit.Files[0].Name != "avatar_options.png" {
+		t.Errorf("expected one file named avatar_options.png, got %v", edit.Files)
+	}
+
+	menu := findSelectMenu(t, *edit.Components)
+	if len(menu.Options) != 2 || menu.Options[0].Value != "0" || menu.Options[1].Value != "1" {
+		t.Errorf("unexpected select menu options: %v", menu.Options)
+	}
+	if menu.Options[0].Description != "A" || menu.Options[1].Description != "B" {
+		t.Errorf("expected option descriptions from included urls, got %q, %q", menu.Options[0].Description, menu.Options[1].Description)
+	}
+
+	candidates, err := cmdCtx.Session.GetImageCandidates(context.Background(), "guild1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 2 || candidates[0] != "http://a" || candidates[1] != "http://b" {
+		t.Errorf("expected candidates to be the included urls, got %v", candidates)
+	}
+}
+
+func TestCreateCharacterCmd_ComposeFailureFallsBackToPlainMessage(t *testing.T) {
+	cmdCtx, s, dbPath := setupCommandTest(t)
+	defer os.Remove(dbPath)
+
+	edit := runCreateCharacterWithImages(t, cmdCtx, s,
+		func(ctx context.Context, query string, limit int) ([]search.Image, error) {
+			return []search.Image{{URL: "http://a", Title: "A"}}, nil
+		},
+		func(ctx context.Context, urls []string, limit int) ([]byte, []string, error) {
+			return nil, nil, fmt.Errorf("no images could be fetched")
+		},
+	)
+
+	if edit == nil {
+		t.Fatal("expected an interaction response edit")
+	}
+	if !strings.Contains(*edit.Content, "Character set to **Display Name**!") {
+		t.Errorf("expected plain fallback message, got %q", *edit.Content)
+	}
+	if edit.Embeds != nil && len(*edit.Embeds) != 0 {
+		t.Errorf("expected no embeds on fallback, got %v", *edit.Embeds)
+	}
+}
+
+func findSelectMenu(t *testing.T, components []discordgo.MessageComponent) *discordgo.SelectMenu {
+	t.Helper()
+	for _, c := range components {
+		row, ok := c.(discordgo.ActionsRow)
+		if !ok {
+			continue
+		}
+		for _, inner := range row.Components {
+			if menu, ok := inner.(discordgo.SelectMenu); ok {
+				return &menu
+			}
+		}
+	}
+	t.Fatal("no select menu found in components")
+	return nil
+}
