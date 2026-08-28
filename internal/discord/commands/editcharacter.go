@@ -24,6 +24,10 @@ import (
 const (
 	editAcceptPrefix = "editchar_accept_"
 	editRejectPrefix = "editchar_reject_"
+
+	// interactionTokenTTL is how long Discord keeps an interaction token
+	// valid; the preview's ack can only be edited through it.
+	interactionTokenTTL = 15 * time.Minute
 )
 
 // Section option keys for /editcharacter
@@ -70,6 +74,15 @@ type pendingEdit struct {
 	reasoning        string
 	latency          time.Duration
 	avatarAttachment string
+	// cardMessageIDs holds the plain channel messages of a multi-message
+	// whole-persona preview (in send order); empty for single-message
+	// previews, whose preview is the ack message itself.
+	cardMessageIDs []string
+	// orig is the original command interaction: its token (valid 15
+	// minutes) is the only route left to the preview's ack message, which
+	// is an interaction response. expiresAt is when that token dies.
+	orig      *discordgo.Interaction
+	expiresAt time.Time
 }
 
 // dropPending discards a generated proposal so its Accept/Reject buttons
@@ -146,13 +159,15 @@ func (c *editCharacterCmd) Execute(ctx context.Context, s DiscordSession, i *dis
 			return
 		}
 		acked = true
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		if err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
 				Content: content,
 				Flags:   flags,
 			},
-		})
+		}); err != nil {
+			logger.FromContext(ctx).Error("failed to acknowledge edit character command", "error", err, "guild_id", i.GuildID)
+		}
 	}
 
 	sectionKey := optionValue(data, "section")
@@ -247,6 +262,8 @@ func (c *editCharacterCmd) proposeRewrite(ctx context.Context, s DiscordSession,
 		prompt:      rewrite.Prompt,
 		reasoning:   rewrite.Reasoning,
 		latency:     latency,
+		orig:        i.Interaction,
+		expiresAt:   time.Now().Add(interactionTokenTTL),
 	}
 	c.pendingMu.Unlock()
 
@@ -269,46 +286,94 @@ func (c *editCharacterCmd) proposeRewrite(ctx context.Context, s DiscordSession,
 		marked = markChanges(current, rewrite.Body)
 	}
 
-	var previewEmbeds []*discordgo.MessageEmbed
+	var messages [][]*discordgo.MessageEmbed
 	var files []*discordgo.File
 	var closeFiles func()
 	if section == sectionKeyGeneral {
 		proposed := *card
 		proposed.Description = marked
-		previewEmbeds, files, closeFiles = buildCharacterCardEmbed(ctx, c.imageClient, i.GuildID, &proposed)
+		messages, files, closeFiles = buildCharacterCardEmbed(c.imageClient, i.GuildID, &proposed)
 		defer closeFiles()
 	} else {
-		previewEmbeds = []*discordgo.MessageEmbed{sectionBodyEmbed(section, marked)}
+		messages = [][]*discordgo.MessageEmbed{{sectionBodyEmbed(section, marked)}}
 	}
 
-	msg, err := s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
-		Content:    utils.PtrString(previewContent),
-		Embeds:     &previewEmbeds,
-		Files:      files,
-		Components: &components,
-	})
-	if err != nil {
-		logger.FromContext(ctx).Error("failed to show edit proposal", "error", err, "character_id", card.CharacterID)
-		// The proposal was generated but could not be shown
-		c.dropPending(token)
-		if _, ferr := s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
-			Content:     utils.PtrString(responses.EditCharacter.ProposalFailed),
-			Embeds:      &[]*discordgo.MessageEmbed{},
-			Attachments: &[]*discordgo.MessageAttachment{},
-			Components:  nil,
-		}); ferr != nil {
-			logger.FromContext(ctx).Error("failed to report edit proposal failure", "error", ferr, "character_id", card.CharacterID)
+	if len(messages) == 1 {
+		msg, err := s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
+			Content:    utils.PtrString(previewContent),
+			Embeds:     &messages[0],
+			Files:      files,
+			Components: &components,
+		})
+		if err != nil {
+			logger.FromContext(ctx).Error("failed to show edit proposal", "error", err, "character_id", card.CharacterID)
+			c.failProposal(ctx, s, i, card, token)
+			return nil
 		}
-		return nil
-	}
-	if msg != nil && len(msg.Attachments) > 0 {
 		c.pendingMu.Lock()
-		if pending, ok := c.pendingEdits[token]; ok {
+		if pending, ok := c.pendingEdits[token]; ok && msg != nil && len(msg.Attachments) > 0 {
 			pending.avatarAttachment = msg.Attachments[0].ID
 		}
 		c.pendingMu.Unlock()
+		return nil
 	}
+
+	// A multi-message preview
+	if _, err := s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
+		Content:    utils.PtrString(previewContent),
+		Components: nil,
+	}); err != nil {
+		logger.FromContext(ctx).Error("failed to show edit proposal", "error", err, "character_id", card.CharacterID)
+		c.failProposal(ctx, s, i, card, token)
+		return nil
+	}
+
+	var cardIDs []string
+	for idx, messageEmbeds := range messages {
+		send := &discordgo.MessageSend{Embeds: messageEmbeds}
+		if idx == 0 {
+			send.Files = files
+		}
+		if idx == len(messages)-1 {
+			send.Components = components
+		}
+		sent, serr := s.ChannelMessageSendComplex(i.ChannelID, send)
+		if serr != nil {
+			logger.FromContext(ctx).Error("failed to send edit proposal message", "error", serr, "character_id", card.CharacterID)
+			if len(cardIDs) == 0 {
+				c.failProposal(ctx, s, i, card, token)
+				return nil
+			}
+			// Move the buttons onto the last message that did go out so the
+			// proposal can still be accepted or rejected.
+			if _, eerr := s.ChannelMessageEditComplex(i.ChannelID, cardIDs[len(cardIDs)-1], &discordgo.MessageEdit{Components: &components}); eerr != nil {
+				logger.FromContext(ctx).Error("failed to attach proposal buttons", "error", eerr, "character_id", card.CharacterID)
+			}
+			break
+		}
+		cardIDs = append(cardIDs, sent.ID)
+	}
+
+	c.pendingMu.Lock()
+	if pending, ok := c.pendingEdits[token]; ok {
+		pending.cardMessageIDs = cardIDs
+	}
+	c.pendingMu.Unlock()
 	return nil
+}
+
+// failProposal discards an in-flight proposal and replaces the ack with an
+// error message so the user is not left on "rewriting…".
+func (c *editCharacterCmd) failProposal(ctx context.Context, s DiscordSession, i *discordgo.InteractionCreate, card *session.CharacterCard, token string) {
+	c.dropPending(token)
+	if _, ferr := s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
+		Content:     utils.PtrString(responses.EditCharacter.ProposalFailed),
+		Embeds:      &[]*discordgo.MessageEmbed{},
+		Attachments: &[]*discordgo.MessageAttachment{},
+		Components:  nil,
+	}); ferr != nil {
+		logger.FromContext(ctx).Error("failed to report edit proposal failure", "error", ferr, "character_id", card.CharacterID)
+	}
 }
 
 // handleEditAccept saves a generated proposal: it splices the new section
@@ -325,10 +390,17 @@ func (c *editCharacterCmd) handleEditAccept(ctx context.Context, s DiscordSessio
 		return
 	}
 
+	if time.Now().After(pending.expiresAt) {
+		c.respondExpiredEphemeral(ctx, s, i)
+		c.deleteCardMessages(ctx, s, i, pending.cardMessageIDs)
+		return
+	}
+
 	card, err := c.session.GetCharacterCard(ctx, i.GuildID, pending.characterID)
 	if err != nil || card == nil {
 		logger.FromContext(ctx).Error("failed to retrieve character for edit", "error", err, "characterID", pending.characterID, "guild_id", i.GuildID)
 		c.respondExpired(ctx, s, i)
+		c.deleteCardMessages(ctx, s, i, pending.cardMessageIDs)
 		return
 	}
 
@@ -361,22 +433,46 @@ func (c *editCharacterCmd) handleEditAccept(ctx context.Context, s DiscordSessio
 	if pending.section == sectionKeyGeneral {
 		display := *card
 		display.Description = markSpecChanges(oldSpec, pending.body)
-		embeds, _, closeFiles := buildCharacterCardEmbed(ctx, c.imageClient, i.GuildID, &display)
-		closeFiles()
+		messages, files, closeFiles := buildCharacterCardEmbed(c.imageClient, i.GuildID, &display)
+		defer closeFiles()
 
-		data := &discordgo.InteractionResponseData{
-			Content: fmt.Sprintf(responses.EditCharacter.Updated, card.DisplayName, "whole persona"),
-			Embeds:  embeds,
+		if len(pending.cardMessageIDs) == 0 {
+			data := &discordgo.InteractionResponseData{
+				Content: fmt.Sprintf(responses.EditCharacter.Updated, card.DisplayName, "whole persona"),
+				Embeds:  messages[0],
+			}
+			if pending.avatarAttachment != "" {
+				data.Attachments = &[]*discordgo.MessageAttachment{{ID: pending.avatarAttachment}}
+			}
+			if err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseUpdateMessage,
+				Data: data,
+			}); err != nil {
+				logger.FromContext(ctx).Error("failed to update accepted persona preview", "error", err, "characterID", pending.characterID)
+			}
+			return
 		}
-		if pending.avatarAttachment != "" {
-			data.Attachments = &[]*discordgo.MessageAttachment{{ID: pending.avatarAttachment}}
-		}
-		if err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseUpdateMessage,
-			Data: data,
+
+		// Multi-message confirmation
+		if _, err := s.InteractionResponseEdit(pending.orig, &discordgo.WebhookEdit{
+			Content:    utils.PtrString(fmt.Sprintf(responses.EditCharacter.Updated, card.DisplayName, "whole persona")),
+			Embeds:     &messages[0],
+			Files:      files,
+			Components: nil,
 		}); err != nil {
-			logger.FromContext(ctx).Error("failed to update accepted persona preview", "error", err, "characterID", pending.characterID)
+			logger.FromContext(ctx).Error("failed to update accepted proposal ack", "error", err, "characterID", pending.characterID)
+			c.respondExpiredEphemeral(ctx, s, i)
+			c.deleteCardMessages(ctx, s, i, pending.cardMessageIDs)
+			return
 		}
+
+		// Acknowledge the click with an invisible deferred update
+		if err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseDeferredMessageUpdate,
+		}); err != nil {
+			logger.FromContext(ctx).Error("failed to acknowledge accepted proposal", "error", err, "characterID", pending.characterID)
+		}
+		c.deleteCardMessages(ctx, s, i, pending.cardMessageIDs)
 		return
 	}
 
@@ -394,13 +490,52 @@ func (c *editCharacterCmd) handleEditAccept(ctx context.Context, s DiscordSessio
 	}
 }
 
+// deleteCardMessages removes the card messages of a multi-message preview.
+func (c *editCharacterCmd) deleteCardMessages(ctx context.Context, s DiscordSession, i *discordgo.InteractionCreate, messageIDs []string) {
+	for _, id := range messageIDs {
+		if err := s.ChannelMessageDelete(i.ChannelID, id); err != nil {
+			logger.FromContext(ctx).Error("failed to delete proposal message", "error", err, "message_id", id)
+		}
+	}
+}
+
 // handleEditReject discards a generated proposal without saving.
 func (c *editCharacterCmd) handleEditReject(ctx context.Context, s DiscordSession, i *discordgo.InteractionCreate) {
 	token := strings.TrimPrefix(i.MessageComponentData().CustomID, editRejectPrefix)
 	c.pendingMu.Lock()
+	pending, ok := c.pendingEdits[token]
 	delete(c.pendingEdits, token)
 	c.pendingMu.Unlock()
-	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+	if ok {
+		if time.Now().After(pending.expiresAt) {
+			c.respondExpiredEphemeral(ctx, s, i)
+			c.deleteCardMessages(ctx, s, i, pending.cardMessageIDs)
+			return
+		}
+		if len(pending.cardMessageIDs) > 1 {
+			// The ack becomes the rejection note and every card message is
+			// deleted.
+			if _, err := s.InteractionResponseEdit(pending.orig, &discordgo.WebhookEdit{
+				Content:    utils.PtrString(responses.EditCharacter.Rejected),
+				Embeds:     &[]*discordgo.MessageEmbed{},
+				Components: nil,
+			}); err != nil {
+				logger.FromContext(ctx).Error("failed to update rejected proposal ack", "error", err, "guild_id", i.GuildID)
+				c.respondExpiredEphemeral(ctx, s, i)
+				c.deleteCardMessages(ctx, s, i, pending.cardMessageIDs)
+				return
+			}
+			// Acknowledge the click with an invisible deferred update
+			if err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseDeferredMessageUpdate,
+			}); err != nil {
+				logger.FromContext(ctx).Error("failed to acknowledge rejected proposal", "error", err, "guild_id", i.GuildID)
+			}
+			c.deleteCardMessages(ctx, s, i, pending.cardMessageIDs)
+			return
+		}
+	}
+	if err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseUpdateMessage,
 		Data: &discordgo.InteractionResponseData{
 			Content:     responses.EditCharacter.Rejected,
@@ -408,12 +543,14 @@ func (c *editCharacterCmd) handleEditReject(ctx context.Context, s DiscordSessio
 			Attachments: &[]*discordgo.MessageAttachment{},
 			Components:  nil,
 		},
-	})
+	}); err != nil {
+		logger.FromContext(ctx).Error("failed to update rejected section preview", "error", err, "guild_id", i.GuildID)
+	}
 }
 
 func (c *editCharacterCmd) respondExpired(ctx context.Context, s DiscordSession, i *discordgo.InteractionCreate) {
 	logger.FromContext(ctx).Warn("edit proposal no longer available", "guild_id", i.GuildID)
-	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+	if err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseUpdateMessage,
 		Data: &discordgo.InteractionResponseData{
 			Content:     responses.EditCharacter.Expired,
@@ -421,7 +558,25 @@ func (c *editCharacterCmd) respondExpired(ctx context.Context, s DiscordSession,
 			Attachments: &[]*discordgo.MessageAttachment{},
 			Components:  nil,
 		},
-	})
+	}); err != nil {
+		logger.FromContext(ctx).Error("failed to report expired edit proposal", "error", err, "guild_id", i.GuildID)
+	}
+}
+
+// respondExpiredEphemeral notifies just the clicking user that the proposal
+// is gone. Used when the proposal is known but its interaction token has
+// expired, so the preview messages can no longer be edited in place.
+func (c *editCharacterCmd) respondExpiredEphemeral(ctx context.Context, s DiscordSession, i *discordgo.InteractionCreate) {
+	logger.FromContext(ctx).Warn("edit proposal token expired", "guild_id", i.GuildID)
+	if err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Content: responses.EditCharacter.Expired,
+			Flags:   discordgo.MessageFlagsEphemeral,
+		},
+	}); err != nil {
+		logger.FromContext(ctx).Error("failed to report expired edit proposal", "error", err, "guild_id", i.GuildID)
+	}
 }
 
 // currentSectionBody returns the body of the given section, or "" for

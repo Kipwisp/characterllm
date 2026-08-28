@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"characterllm/internal/research"
 	"characterllm/internal/session"
@@ -723,5 +724,318 @@ func TestEditCharacterCmd_EditConfirmExpired(t *testing.T) {
 	card, _ := sm.GetCharacterCard(context.Background(), guildID, "char1")
 	if card.Description != editTestSpec {
 		t.Errorf("expired proposal must not modify the spec")
+	}
+}
+
+func TestEditCharacterCmd_GeneralRewrite_Overflow(t *testing.T) {
+	cmdCtx, s, dbPath := setupCommandTest(t)
+	defer os.Remove(dbPath)
+
+	guildID := "guild1"
+	sm := cmdCtx.Session
+	cmdCtx.ImageClient = &mockImageClient{}
+
+	var currentSpec string
+	for i := 0; i < 6; i++ {
+		currentSpec += "### Section " + string(rune('A'+i)) + "\n" + strings.Repeat("w", 1200) + "\n\n"
+	}
+	sm.SaveCharacterCard(context.Background(), guildID, &session.CharacterCard{
+		CharacterID: "char1",
+		DisplayName: "Overflow Char",
+		Description: currentSpec,
+	})
+
+	// The LLM returns a large spec, so both the marked preview and the
+	// clean confirmation span two messages; Accept must update the earlier
+	// message to its confirmation embeds and the last one (carrying the
+	// buttons) through the callback.
+	var proposedSpec string
+	for i := 0; i < 6; i++ {
+		proposedSpec += "### Section " + string(rune('A'+i)) + "\n" + strings.Repeat("x", 1200) + "\n\n"
+	}
+	mockSynth := &mockSynthesizer{
+		RewriteSectionFn: func(ctx context.Context, req research.SectionRewriteRequest) (*research.SectionRewriteResult, error) {
+			return &research.SectionRewriteResult{Body: proposedSpec, Reasoning: "ok"}, nil
+		},
+	}
+
+	var ackEdits []editSnapshot
+	s.InteractionResponseEditFn = func(interaction *discordgo.Interaction, edit *discordgo.WebhookEdit) (*discordgo.Message, error) {
+		ackEdits = append(ackEdits, snapshotEdit(edit))
+		return &discordgo.Message{ID: "ack"}, nil
+	}
+
+	var sends []discordgo.MessageSend
+	s.ChannelMessageSendComplexFn = func(channelID string, msg *discordgo.MessageSend) (*discordgo.Message, error) {
+		sends = append(sends, *msg)
+		return &discordgo.Message{ID: fmt.Sprintf("ov%d", len(sends))}, nil
+	}
+
+	var deleted []string
+	s.ChannelMessageDeleteFn = func(channelID, messageID string) error {
+		deleted = append(deleted, messageID)
+		return nil
+	}
+
+	var clickType discordgo.InteractionResponseType
+	s.InteractionRespondFn = func(interaction *discordgo.Interaction, response *discordgo.InteractionResponse) error {
+		clickType = response.Type
+		return nil
+	}
+
+	cmd := &editCharacterCmd{session: sm, imageClient: cmdCtx.ImageClient, synthesizer: mockSynth, audit: cmdCtx.Audit}
+	err := cmd.Execute(context.Background(), s, newEditInteraction(guildID, "char1",
+		stringOption("section", "general"),
+		stringOption("instruction", "rewrite everything"),
+	))
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+	if len(ackEdits) != 1 || ackEdits[0].acceptID != "" {
+		t.Fatalf("expected a plain-text ack without buttons, got %+v", ackEdits)
+	}
+	if len(sends) < 2 {
+		t.Fatalf("expected a multi-message preview, got %d sends", len(sends))
+	}
+	acceptID, rejectID := editButtonIDs(sends[len(sends)-1].Components)
+	if acceptID == "" || rejectID == "" {
+		t.Fatalf("expected the buttons on the last preview message, got %+v", sends[len(sends)-1].Components)
+	}
+	for idx := range sends[:len(sends)-1] {
+		if len(sends[idx].Components) != 0 {
+			t.Errorf("message %d must not carry buttons", idx)
+		}
+	}
+
+	cmd.handleEditAccept(context.Background(), s, newComponentInteraction(guildID, acceptID))
+
+	card, _ := sm.GetCharacterCard(context.Background(), guildID, "char1")
+	if card.Description != proposedSpec {
+		t.Errorf("whole spec not replaced")
+	}
+	// The ack (an interaction response) becomes the confirmation through the
+	// original interaction's token.
+	if len(ackEdits) != 2 {
+		t.Fatalf("expected the ack to be edited again on Accept, got %d edits", len(ackEdits))
+	}
+	if !strings.Contains(ackEdits[1].content, "Updated **Overflow Char**: whole persona") {
+		t.Errorf("expected the confirmation on the ack, got %q", ackEdits[1].content)
+	}
+	if len(ackEdits[1].embeds) == 0 {
+		t.Error("expected confirmation embeds on the ack")
+	}
+	// The button click is acknowledged with an ephemeral note.
+	if clickType != discordgo.InteractionResponseDeferredMessageUpdate {
+		t.Errorf("expected an invisible deferred-update acknowledgment, got type %d", clickType)
+	}
+	// Every card message is deleted.
+	for idx := range sends {
+		if !contains(deleted, fmt.Sprintf("ov%d", idx+1)) {
+			t.Errorf("card message ov%d must be deleted, got %v", idx+1, deleted)
+		}
+	}
+}
+
+// TestEditCharacterCmd_OverflowOutcomeOnAck covers the multi-message
+// resolution: the ack is edited to the confirmation and every card message
+// is deleted. The pending entry is injected directly so the scenario is
+// deterministic.
+func TestEditCharacterCmd_OverflowOutcomeOnAck(t *testing.T) {
+	cmdCtx, s, dbPath := setupCommandTest(t)
+	defer os.Remove(dbPath)
+
+	guildID := "guild1"
+	sm := cmdCtx.Session
+	cmdCtx.ImageClient = &mockImageClient{}
+	sm.SaveCharacterCard(context.Background(), guildID, &session.CharacterCard{
+		CharacterID: "char1",
+		DisplayName: "Surplus Char",
+		Description: editTestSpec,
+	})
+
+	token := "surplustoken"
+	cmd := &editCharacterCmd{session: sm, imageClient: cmdCtx.ImageClient, synthesizer: &mockSynthesizer{}, audit: cmdCtx.Audit}
+	cmd.pendingEdits = map[string]*pendingEdit{token: {
+		characterID:    "char1",
+		section:        sectionKeyGeneral,
+		body:           editTestSpec,
+		orig:           &discordgo.Interaction{},
+		expiresAt:      time.Now().Add(time.Minute),
+		cardMessageIDs: []string{"ov1", "ov2", "ov3", "ov4"},
+	}}
+
+	var ackEdits []editSnapshot
+	s.InteractionResponseEditFn = func(interaction *discordgo.Interaction, edit *discordgo.WebhookEdit) (*discordgo.Message, error) {
+		ackEdits = append(ackEdits, snapshotEdit(edit))
+		return &discordgo.Message{ID: "ack"}, nil
+	}
+	var deleted []string
+	s.ChannelMessageDeleteFn = func(channelID, messageID string) error {
+		deleted = append(deleted, messageID)
+		return nil
+	}
+	var clickType discordgo.InteractionResponseType
+	s.InteractionRespondFn = func(interaction *discordgo.Interaction, response *discordgo.InteractionResponse) error {
+		clickType = response.Type
+		return nil
+	}
+
+	cmd.handleEditAccept(context.Background(), s, newComponentInteraction(guildID, editAcceptPrefix+token))
+
+	if len(ackEdits) != 1 {
+		t.Fatalf("expected the ack to be edited to the confirmation, got %d edits", len(ackEdits))
+	}
+	if !strings.Contains(ackEdits[0].content, "Updated **Surplus Char**: whole persona") {
+		t.Errorf("expected whole-persona confirmation on the ack, got %q", ackEdits[0].content)
+	}
+	if len(ackEdits[0].embeds) == 0 {
+		t.Error("expected confirmation embeds on the ack")
+	}
+	if clickType != discordgo.InteractionResponseDeferredMessageUpdate {
+		t.Errorf("expected an invisible deferred-update acknowledgment, got type %d", clickType)
+	}
+	for _, id := range []string{"ov1", "ov2", "ov3", "ov4"} {
+		if !contains(deleted, id) {
+			t.Errorf("card message %s must be deleted, got %v", id, deleted)
+		}
+	}
+}
+
+// TestEditCharacterCmd_TokenExpired covers a button click after the
+// original interaction token has died: the user gets an ephemeral expired
+// notice and the card messages are cleaned up (the ack itself is beyond
+// reach once the token expires).
+func TestEditCharacterCmd_TokenExpired(t *testing.T) {
+	cmdCtx, s, dbPath := setupCommandTest(t)
+	defer os.Remove(dbPath)
+
+	guildID := "guild1"
+	sm := cmdCtx.Session
+	cmdCtx.ImageClient = &mockImageClient{}
+	sm.SaveCharacterCard(context.Background(), guildID, &session.CharacterCard{
+		CharacterID: "char1",
+		DisplayName: "Expired Char",
+		Description: editTestSpec,
+	})
+
+	token := "expiredtoken"
+	cmd := &editCharacterCmd{session: sm, imageClient: cmdCtx.ImageClient, synthesizer: &mockSynthesizer{}, audit: cmdCtx.Audit}
+	cmd.pendingEdits = map[string]*pendingEdit{token: {
+		characterID:    "char1",
+		section:        sectionKeyGeneral,
+		body:           editTestSpec,
+		orig:           &discordgo.Interaction{},
+		expiresAt:      time.Now().Add(-time.Minute),
+		cardMessageIDs: []string{"ov1", "ov2"},
+	}}
+
+	var ephemeralContent string
+	var ephemeralFlags discordgo.MessageFlags
+	s.InteractionRespondFn = func(interaction *discordgo.Interaction, response *discordgo.InteractionResponse) error {
+		if response.Type == discordgo.InteractionResponseChannelMessageWithSource && response.Data != nil {
+			ephemeralContent = response.Data.Content
+			ephemeralFlags = response.Data.Flags
+		}
+		return nil
+	}
+	var deleted []string
+	s.ChannelMessageDeleteFn = func(channelID, messageID string) error {
+		deleted = append(deleted, messageID)
+		return nil
+	}
+
+	cmd.handleEditAccept(context.Background(), s, newComponentInteraction(guildID, editAcceptPrefix+token))
+
+	if ephemeralContent != "This edit proposal is no longer available." {
+		t.Errorf("expected an expired notice, got %q", ephemeralContent)
+	}
+	if ephemeralFlags&discordgo.MessageFlagsEphemeral == 0 {
+		t.Error("expected the expired notice to be ephemeral")
+	}
+	for _, id := range []string{"ov1", "ov2"} {
+		if !contains(deleted, id) {
+			t.Errorf("card message %s must be deleted, got %v", id, deleted)
+		}
+	}
+	card, _ := sm.GetCharacterCard(context.Background(), guildID, "char1")
+	if card.Description != editTestSpec {
+		t.Error("expired proposal must not modify the spec")
+	}
+}
+
+func contains(ss []string, v string) bool {
+	for _, s := range ss {
+		if s == v {
+			return true
+		}
+	}
+	return false
+}
+
+// TestEditCharacterCmd_MultiReject covers the multi-message Reject path:
+// the ack is edited to the rejection note, the click is acknowledged
+// ephemerally, and every card message is deleted.
+func TestEditCharacterCmd_MultiReject(t *testing.T) {
+	cmdCtx, s, dbPath := setupCommandTest(t)
+	defer os.Remove(dbPath)
+
+	guildID := "guild1"
+	sm := cmdCtx.Session
+	cmdCtx.ImageClient = &mockImageClient{}
+	sm.SaveCharacterCard(context.Background(), guildID, &session.CharacterCard{
+		CharacterID: "char1",
+		DisplayName: "Multi Reject Char",
+		Description: editTestSpec,
+	})
+
+	token := "multirejecttoken"
+	cmd := &editCharacterCmd{session: sm, imageClient: cmdCtx.ImageClient, synthesizer: &mockSynthesizer{}, audit: cmdCtx.Audit}
+	cmd.pendingEdits = map[string]*pendingEdit{token: {
+		characterID:    "char1",
+		section:        sectionKeyGeneral,
+		body:           editTestSpec,
+		orig:           &discordgo.Interaction{},
+		expiresAt:      time.Now().Add(time.Minute),
+		cardMessageIDs: []string{"ov1", "ov2"},
+	}}
+
+	var ackEdits []editSnapshot
+	s.InteractionResponseEditFn = func(interaction *discordgo.Interaction, edit *discordgo.WebhookEdit) (*discordgo.Message, error) {
+		ackEdits = append(ackEdits, snapshotEdit(edit))
+		return &discordgo.Message{ID: "ack"}, nil
+	}
+	var clickType discordgo.InteractionResponseType
+	s.InteractionRespondFn = func(interaction *discordgo.Interaction, response *discordgo.InteractionResponse) error {
+		clickType = response.Type
+		return nil
+	}
+	var deleted []string
+	s.ChannelMessageDeleteFn = func(channelID, messageID string) error {
+		deleted = append(deleted, messageID)
+		return nil
+	}
+
+	cmd.handleEditReject(context.Background(), s, newComponentInteraction(guildID, editRejectPrefix+token))
+
+	if len(ackEdits) != 1 {
+		t.Fatalf("expected the ack to be edited to the rejection, got %d edits", len(ackEdits))
+	}
+	if ackEdits[0].content != "Edit rejected — the character is unchanged." {
+		t.Errorf("expected the rejection note on the ack, got %q", ackEdits[0].content)
+	}
+	if len(ackEdits[0].embeds) != 0 {
+		t.Errorf("expected no embeds on the rejection ack, got %d", len(ackEdits[0].embeds))
+	}
+	if clickType != discordgo.InteractionResponseDeferredMessageUpdate {
+		t.Errorf("expected an invisible deferred-update acknowledgment, got type %d", clickType)
+	}
+	for _, id := range []string{"ov1", "ov2"} {
+		if !contains(deleted, id) {
+			t.Errorf("card message %s must be deleted, got %v", id, deleted)
+		}
+	}
+	card, _ := sm.GetCharacterCard(context.Background(), guildID, "char1")
+	if card.Description != editTestSpec {
+		t.Error("rejected proposal must not modify the spec")
 	}
 }

@@ -188,7 +188,7 @@ func respondResolveError(ctx context.Context, s DiscordSession, i *discordgo.Int
 }
 
 func currentChoice() *discordgo.ApplicationCommandOptionChoice {
-	return &discordgo.ApplicationCommandOptionChoice{Name: "current (active character)", Value: currentCardName}
+	return &discordgo.ApplicationCommandOptionChoice{Name: "Current (active character)", Value: currentCardName}
 }
 
 // autocompleteCharacters builds Discord autocomplete choices for the guild's
@@ -326,11 +326,14 @@ func ApplyCharacterAvatar(ctx context.Context, imgClient images.ImageClient, s D
 	return nil
 }
 
-// buildCharacterCardEmbed assembles the character-card embeds and the avatar
-// attachment (local cache first, stored hint URL as fallback) for the given
-// card. The first embed carries the card identity — display name, avatar
-// thumbnail, and official name / series / ID fields.
-func buildCharacterCardEmbed(ctx context.Context, imageClient images.ImageClient, guildID string, card *session.CharacterCard) ([]*discordgo.MessageEmbed, []*discordgo.File, func()) {
+// buildCharacterCardEmbed assembles the character card as a slice of
+// messages (one embed slice per message) plus the avatar attachment (local
+// cache first, stored hint URL as fallback). Message 1 carries the identity
+// embed — display name, avatar thumbnail, and official name / series / ID
+// fields — and each "### " spec section gets its own embed; sections that do
+// not fit the per-message embed budget continue in follow-up messages, so
+// the full spec is always shown.
+func buildCharacterCardEmbed(imageClient images.ImageClient, guildID string, card *session.CharacterCard) ([][]*discordgo.MessageEmbed, []*discordgo.File, func()) {
 	embed, files, closeFiles := characterAvatarEmbed(imageClient, guildID, card)
 
 	field := func(name, value string, inline bool) *discordgo.MessageEmbedField {
@@ -345,43 +348,39 @@ func buildCharacterCardEmbed(ctx context.Context, imageClient images.ImageClient
 	embed.Fields = append(embed.Fields, field("ID", "`"+card.CharacterID+"`", true))
 
 	// Discord caps the total of all embed text in one message at
-	// embedTotalLimit, so the identity embed and every section share a single
-	// budget. Sections are filled in order; a body is truncated when the
-	// budget runs short and the trailing sections that no longer fit are
-	// dropped.
-	sections := research.SplitSections(card.Description)
+	// embedTotalLimit (and the number of embeds at embedCountLimit), so each
+	// message gets a fresh budget and sections roll over into follow-up
+	// messages as budgets fill up. A section body that cannot fit any single
+	// embed is truncated at the description cap.
+	messages := [][]*discordgo.MessageEmbed{{embed}}
 	budget := embedTotalLimit - embedTextLen(embed)
-	sectionEmbeds := []*discordgo.MessageEmbed{}
-	truncated := false
-	for _, sec := range sections {
-		if len(sectionEmbeds) == embedCountLimit-1 {
-			truncated = true
-			break
-		}
+	for _, sec := range research.SplitSections(card.Description) {
 		// Title plus room for the ellipsis truncateToRuneLimit may append.
 		overhead := len([]rune(sec.Name)) + 3
-		if overhead > budget {
-			truncated = true
-			break
-		}
-		allowance := embedDescriptionMax
-		if allowance > budget-overhead {
-			allowance = budget - overhead
-		}
 		body := sec.Body
+		// A section rolls into a fresh message whenever its body (at most
+		// the description cap) does not fit the current budget. A body
+		// larger than any single embed is then truncated at the cap.
+		bodyLen := len([]rune(body))
+		if bodyLen > embedDescriptionMax {
+			bodyLen = embedDescriptionMax
+		}
+		if len(messages[len(messages)-1]) == embedCountLimit || overhead+bodyLen > budget {
+			messages = append(messages, nil)
+			budget = embedTotalLimit
+		}
+		allowance := budget - overhead
+		if allowance > embedDescriptionMax {
+			allowance = embedDescriptionMax
+		}
 		if len([]rune(body)) > allowance {
 			body = truncateToRuneLimit(body, allowance)
-			truncated = true
 		}
 		secEmbed := sectionBodyEmbed(sec.Name, body)
-		sectionEmbeds = append(sectionEmbeds, secEmbed)
+		messages[len(messages)-1] = append(messages[len(messages)-1], secEmbed)
 		budget -= embedTextLen(secEmbed)
 	}
-	if truncated {
-		logger.FromContext(ctx).Warn("persona spec exceeds the per-message embed text limit; the card view is truncated",
-			"guild_id", guildID, "character_id", card.CharacterID, "sections_shown", len(sectionEmbeds), "sections_total", len(sections))
-	}
-	return append([]*discordgo.MessageEmbed{embed}, sectionEmbeds...), files, closeFiles
+	return messages, files, closeFiles
 }
 
 // embedTextLen is how much of an embed's text counts toward the

@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"characterllm/internal/images"
+	"characterllm/internal/logger"
 	"characterllm/internal/session"
 
 	"github.com/bwmarrin/discordgo"
@@ -41,19 +42,26 @@ func (c *viewCharacterCmd) Execute(ctx context.Context, s DiscordSession, i *dis
 	return c.viewCard(ctx, s, i, card)
 }
 
-// viewCard renders the full character card as an embed, with the cached
-// avatar attached as the embed image when available.
+// viewCard renders the full character card as embeds, with the cached avatar
+// attached to the first message. Sections that do not fit the first
+// message's embed budget are sent as follow-up channel messages.
 func (c *viewCharacterCmd) viewCard(ctx context.Context, s DiscordSession, i *discordgo.InteractionCreate, card *session.CharacterCard) error {
-	embeds, files, closeFiles := buildCharacterCardEmbed(ctx, c.imageClient, i.GuildID, card)
+	messages, files, closeFiles := buildCharacterCardEmbed(c.imageClient, i.GuildID, card)
 	defer closeFiles()
 	if err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
-			Embeds: embeds,
+			Embeds: messages[0],
 			Files:  files,
 		},
 	}); err != nil {
 		return err
+	}
+	for _, follow := range messages[1:] {
+		if _, err := s.ChannelMessageSendComplex(i.ChannelID, &discordgo.MessageSend{Embeds: follow}); err != nil {
+			logger.FromContext(ctx).Error("failed to send character card overflow message", "error", err, "character_id", card.CharacterID)
+			break
+		}
 	}
 	return nil
 }

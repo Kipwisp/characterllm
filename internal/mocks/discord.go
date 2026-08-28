@@ -7,17 +7,20 @@ import (
 // MockDiscordSession is a configurable test double for the DiscordSession
 // interface used by the discord handlers and commands.
 type MockDiscordSession struct {
-	State                     *discordgo.State
-	ChannelTypingFn           func(channelID string) error
-	ChannelMessageSendFn      func(channelID string, content string) (*discordgo.Message, error)
-	ChannelMessageSendReplyFn func(channelID string, content string, response *discordgo.MessageReference) (*discordgo.Message, error)
-	InteractionRespondFn      func(interaction *discordgo.Interaction, response *discordgo.InteractionResponse) error
-	InteractionResponseEditFn func(interaction *discordgo.Interaction, edit *discordgo.WebhookEdit) (*discordgo.Message, error)
-	GuildMemberNicknameFn     func(guildID string, member string, nickname string) error
-	UpdateGuildAvatarFn       func(guildID, avatarDataURI string) error
-	GetTokenFn                func() string
-	GetUserMentionFn          func() string
-	GetUserIDFn               func() string
+	State                       *discordgo.State
+	ChannelTypingFn             func(channelID string) error
+	ChannelMessageSendFn        func(channelID string, content string) (*discordgo.Message, error)
+	ChannelMessageSendReplyFn   func(channelID string, content string, response *discordgo.MessageReference) (*discordgo.Message, error)
+	ChannelMessageSendComplexFn func(channelID string, msg *discordgo.MessageSend) (*discordgo.Message, error)
+	ChannelMessageEditComplexFn func(channelID, messageID string, edit *discordgo.MessageEdit) (*discordgo.Message, error)
+	ChannelMessageDeleteFn      func(channelID, messageID string) error
+	InteractionRespondFn        func(interaction *discordgo.Interaction, response *discordgo.InteractionResponse) error
+	InteractionResponseEditFn   func(interaction *discordgo.Interaction, edit *discordgo.WebhookEdit) (*discordgo.Message, error)
+	GuildMemberNicknameFn       func(guildID string, member string, nickname string) error
+	UpdateGuildAvatarFn         func(guildID, avatarDataURI string) error
+	GetTokenFn                  func() string
+	GetUserMentionFn            func() string
+	GetUserIDFn                 func() string
 }
 
 func (m *MockDiscordSession) ChannelTyping(channelID string) error {
@@ -39,6 +42,27 @@ func (m *MockDiscordSession) ChannelMessageSendReply(channelID string, content s
 		return nil, nil
 	}
 	return m.ChannelMessageSendReplyFn(channelID, content, response)
+}
+
+func (m *MockDiscordSession) ChannelMessageSendComplex(channelID string, msg *discordgo.MessageSend) (*discordgo.Message, error) {
+	if m.ChannelMessageSendComplexFn == nil {
+		return nil, nil
+	}
+	return m.ChannelMessageSendComplexFn(channelID, msg)
+}
+
+func (m *MockDiscordSession) ChannelMessageEditComplex(channelID, messageID string, edit *discordgo.MessageEdit) (*discordgo.Message, error) {
+	if m.ChannelMessageEditComplexFn == nil {
+		return nil, nil
+	}
+	return m.ChannelMessageEditComplexFn(channelID, messageID, edit)
+}
+
+func (m *MockDiscordSession) ChannelMessageDelete(channelID, messageID string) error {
+	if m.ChannelMessageDeleteFn == nil {
+		return nil
+	}
+	return m.ChannelMessageDeleteFn(channelID, messageID)
 }
 
 func (m *MockDiscordSession) InteractionRespond(interaction *discordgo.Interaction, response *discordgo.InteractionResponse) error {

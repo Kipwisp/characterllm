@@ -267,15 +267,15 @@ func TestViewCharacterCmd_EmbedCaps(t *testing.T) {
 	}
 }
 
-func TestViewCharacterCmd_EmbedCaps_MultiSectionBudget(t *testing.T) {
+func TestViewCharacterCmd_EmbedCaps_MultiMessage(t *testing.T) {
 	cmdCtx, s, dbPath := setupCommandTest(t)
 	defer os.Remove(dbPath)
 
 	cmdCtx.ImageClient = &mockImageClient{}
 
 	// Six 1200-rune sections: well over the 6000 per-message embed total,
-	// so the trailing sections must be dropped (or truncated) rather than
-	// making the API reject the whole message.
+	// so the overflow must continue in follow-up messages rather than being
+	// dropped.
 	var spec string
 	for i := 0; i < 6; i++ {
 		spec += "### Section " + string(rune('A'+i)) + "\n" + strings.Repeat("w", 1200) + "\n\n"
@@ -286,32 +286,54 @@ func TestViewCharacterCmd_EmbedCaps_MultiSectionBudget(t *testing.T) {
 		Description: spec,
 	})
 
-	var embeds []*discordgo.MessageEmbed
+	var firstEmbeds []*discordgo.MessageEmbed
+	var followUps [][]*discordgo.MessageEmbed
 	s.InteractionRespondFn = func(interaction *discordgo.Interaction, response *discordgo.InteractionResponse) error {
-		embeds = response.Data.Embeds
+		firstEmbeds = response.Data.Embeds
 		return nil
+	}
+	s.ChannelMessageSendComplexFn = func(channelID string, msg *discordgo.MessageSend) (*discordgo.Message, error) {
+		followUps = append(followUps, msg.Embeds)
+		return &discordgo.Message{ID: "follow"}, nil
 	}
 
 	cmd := &viewCharacterCmd{session: cmdCtx.Session, imageClient: cmdCtx.ImageClient}
 	if err := cmd.Execute(context.Background(), s, viewInteraction(t, "char1")); err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
-	if len(embeds) < 2 {
-		t.Fatalf("expected identity + section embeds, got %d", len(embeds))
+	if len(firstEmbeds) < 2 {
+		t.Fatalf("expected identity + section embeds in message 1, got %d", len(firstEmbeds))
 	}
-	total := 0
-	truncated := false
-	for idx, embed := range embeds {
-		total += embedTextLen(embed)
-		if idx > 0 && strings.HasSuffix(embed.Description, "...") {
-			truncated = true
+	if len(followUps) == 0 {
+		t.Fatal("expected overflow sections in follow-up messages")
+	}
+
+	// Every message stays within both caps and all six sections are present
+	// exactly once across the messages, untruncated.
+	seen := map[string]bool{}
+	for idx, message := range append([][]*discordgo.MessageEmbed{firstEmbeds}, followUps...) {
+		total := 0
+		for _, embed := range message {
+			total += embedTextLen(embed)
+			if len(embed.Description) > 0 {
+				if strings.HasSuffix(embed.Description, "...") {
+					t.Errorf("message %d: section was truncated: %q", idx, embed.Title)
+				}
+				seen[embed.Title] = true
+			}
+		}
+		if len(message) > embedCountLimit {
+			t.Errorf("message %d has %d embeds, over the %d cap", idx, len(message), embedCountLimit)
+		}
+		if total > embedTotalLimit {
+			t.Errorf("message %d embed text total %d exceeds Discord's %d cap", idx, total, embedTotalLimit)
 		}
 	}
-	if total > embedTotalLimit {
-		t.Errorf("message embed text total %d exceeds Discord's %d cap", total, embedTotalLimit)
-	}
-	if len(embeds)-1 > 6 || (len(embeds)-1 == 6 && !truncated) {
-		t.Errorf("expected dropped or truncated sections, got %d embeds, truncated=%v", len(embeds), truncated)
+	for i := 0; i < 6; i++ {
+		name := "Section " + string(rune('A'+i))
+		if !seen[name] {
+			t.Errorf("section %q missing from the card messages", name)
+		}
 	}
 }
 

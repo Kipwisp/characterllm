@@ -35,6 +35,20 @@ func (w *sessionWrapper) ChannelMessageSendReply(channelID string, content strin
 	return w.s.ChannelMessageSendReply(channelID, content, response)
 }
 
+func (w *sessionWrapper) ChannelMessageSendComplex(channelID string, msg *discordgo.MessageSend) (*discordgo.Message, error) {
+	return w.s.ChannelMessageSendComplex(channelID, msg)
+}
+
+func (w *sessionWrapper) ChannelMessageEditComplex(channelID, messageID string, edit *discordgo.MessageEdit) (*discordgo.Message, error) {
+	edit.Channel = channelID
+	edit.ID = messageID
+	return w.s.ChannelMessageEditComplex(edit)
+}
+
+func (w *sessionWrapper) ChannelMessageDelete(channelID, messageID string) error {
+	return w.s.ChannelMessageDelete(channelID, messageID)
+}
+
 func (w *sessionWrapper) InteractionRespond(interaction *discordgo.Interaction, response *discordgo.InteractionResponse) error {
 	return w.s.InteractionRespond(interaction, response)
 }
