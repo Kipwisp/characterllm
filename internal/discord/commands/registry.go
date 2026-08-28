@@ -64,12 +64,11 @@ func New(d Deps) *Registry {
 	viewCharacter := &viewCharacterCmd{session: d.Session, imageClient: d.ImageClient}
 
 	registry := &Registry{
-		session: d.Session,
-		byName:  make(map[string]slashCommand),
-		componentRoutes: map[string]componentFunc{
-			setCharacterImageID: createCharacter.handleImageSelection,
-		},
+		session:         d.Session,
+		byName:          make(map[string]slashCommand),
+		componentRoutes: map[string]componentFunc{},
 		componentPrefixes: []prefixRoute{
+			{prefix: setCharacterImagePrefix, handle: createCharacter.handleImageSelection},
 			{prefix: deleteConfirmPrefix, handle: deleteCharacter.handleDeleteConfirm},
 			{prefix: deleteCancelPrefix, handle: deleteCharacter.handleDeleteCancel},
 			{prefix: deleteThreadConfirmPrefix, handle: deleteThread.handleDeleteConfirm},

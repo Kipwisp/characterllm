@@ -372,16 +372,17 @@ func (c *createCharacterCmd) renderAvatarMenu(ctx context.Context, s DiscordSess
 		})
 	}
 
-	// Save candidates to session to retrieve them in HandleComponent
-	if err := c.session.SaveImageCandidates(ctx, i.GuildID, r.candidates); err != nil {
-		logger.FromContext(ctx).Error("failed to save image candidates", "error", err, "guild_id", i.GuildID)
+	// Save candidates under a per-menu token
+	menuToken := newComponentToken()
+	if err := c.session.SaveImageCandidates(ctx, menuToken, r.candidates); err != nil {
+		logger.FromContext(ctx).Error("failed to save image candidates", "error", err)
 	}
 
 	components := []discordgo.MessageComponent{
 		discordgo.ActionsRow{
 			Components: []discordgo.MessageComponent{
 				discordgo.SelectMenu{
-					CustomID: setCharacterImageID,
+					CustomID: setCharacterImagePrefix + menuToken,
 					Options:  options,
 				},
 			},
@@ -423,9 +424,10 @@ func (c *createCharacterCmd) handleImageSelection(ctx context.Context, s Discord
 	}
 
 	// Retrieve candidate images from session
-	candidates, err := c.session.GetImageCandidates(ctx, i.GuildID)
+	menuToken := strings.TrimPrefix(i.MessageComponentData().CustomID, setCharacterImagePrefix)
+	candidates, err := c.session.GetImageCandidates(ctx, menuToken)
 	if err != nil {
-		logger.FromContext(ctx).Error("failed to retrieve image candidates", "error", err, "guild_id", i.GuildID)
+		logger.FromContext(ctx).Error("failed to retrieve image candidates", "error", err, "menu_token", menuToken)
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
@@ -486,8 +488,8 @@ func (c *createCharacterCmd) handleImageSelection(ctx context.Context, s Discord
 	}
 
 	// Clean up candidates
-	if err := c.session.ClearImageCandidates(ctx, i.GuildID); err != nil {
-		logger.FromContext(ctx).Error("failed to clear image candidates", "error", err, "guild_id", i.GuildID)
+	if err := c.session.ClearImageCandidates(ctx, menuToken); err != nil {
+		logger.FromContext(ctx).Error("failed to clear image candidates", "error", err, "menu_token", menuToken)
 	}
 
 	// Retrieve full character card for the final success message

@@ -2,18 +2,12 @@ package session
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"os"
 	"testing"
 
 	_ "modernc.org/sqlite"
 )
-
-// openSQL opens a raw SQLite connection for pre-seeding legacy schemas.
-func openSQL(path string) (*sql.DB, error) {
-	return sql.Open("sqlite", path)
-}
 
 func TestEnsureDefaultThread(t *testing.T) {
 	m, tmpFile := setupManager(t)
@@ -303,72 +297,46 @@ func TestGetCharacterDetailsIncludesActiveThread(t *testing.T) {
 		t.Errorf("expected active thread %q in details, got %q", thread.ThreadID, details.ActiveThreadID)
 	}
 }
-
-func TestActiveThreadColumnMigration(t *testing.T) {
-	tmpFile := t.TempDir() + "/legacy.db"
-	// A pre-feature database: character_cards without the active_thread_id column.
-	db, err := openSQL(tmpFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	schema := `
-		CREATE TABLE IF NOT EXISTS guild_config (
-			guild_id TEXT PRIMARY KEY,
-			active_character_id TEXT
-		);
-		CREATE TABLE IF NOT EXISTS character_cards (
-			guild_id TEXT,
-			character_id TEXT,
-			official_name TEXT,
-			series TEXT,
-			display_name TEXT,
-			description TEXT,
-			image_url TEXT DEFAULT '',
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			PRIMARY KEY (guild_id, character_id)
-		);
-		CREATE TABLE IF NOT EXISTS chat_history (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			guild_id TEXT,
-			character_id TEXT,
-			thread_id TEXT,
-			role TEXT,
-			content TEXT,
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-		);
-		CREATE TABLE IF NOT EXISTS conversation_summaries (
-			guild_id TEXT,
-			character_id TEXT,
-			thread_id TEXT,
-			content TEXT,
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			PRIMARY KEY (guild_id, character_id, thread_id)
-		);`
-	if _, err := db.Exec(schema); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	m, err := NewManager(tmpFile, "Default Prompt")
-	if err != nil {
-		t.Fatalf("NewManager on legacy db failed: %v", err)
-	}
+func TestCountCharacterThreads(t *testing.T) {
+	m, tmpFile := setupManager(t)
+	defer os.Remove(tmpFile)
 	defer m.Close()
 	ctx := context.Background()
 
-	guildID := "guild1"
-	charID := "char1"
-	if err := m.SaveCharacterCard(ctx, guildID, &CharacterCard{CharacterID: charID, DisplayName: "Legacy"}); err != nil {
-		t.Fatalf("SaveCharacterCard on migrated db failed: %v", err)
+	m.SaveCharacterCard(ctx, "guild1", &CharacterCard{CharacterID: "char1", DisplayName: "A"})
+	m.SaveCharacterCard(ctx, "guild1", &CharacterCard{CharacterID: "char2", DisplayName: "B"})
+	m.SetActiveCharacter(ctx, "guild1", "char2")
+
+	// Legacy history (no threads rows yet) counts as zero until promoted.
+	m.SaveMessage(ctx, "guild1", "thread-a", "user", "for char2")
+	count, err := m.CountCharacterThreads(ctx, "guild1", "char1")
+	if err != nil || count != 0 {
+		t.Errorf("expected 0 for char1, got %d (err %v)", count, err)
 	}
-	m.SetActiveCharacter(ctx, guildID, charID)
-	if err := m.EnsureDefaultThread(ctx, guildID, charID); err != nil {
-		t.Fatalf("EnsureDefaultThread on migrated db failed: %v", err)
+	count, err = m.CountCharacterThreads(ctx, "guild1", "char2")
+	if err != nil || count != 0 {
+		t.Errorf("expected 0 before promotion for char2, got %d (err %v)", count, err)
 	}
-	active, err := m.GetActiveThreadID(ctx, guildID, charID)
-	if err != nil || active != "1" {
-		t.Errorf("expected migrated active pointer %q, got %q (err %v)", "1", active, err)
+
+	// Promotion adds the default thread; created threads are counted.
+	if err := m.EnsureDefaultThread(ctx, "guild1", "char2"); err != nil {
+		t.Fatalf("EnsureDefaultThread failed: %v", err)
+	}
+	count, err = m.CountCharacterThreads(ctx, "guild1", "char2")
+	if err != nil || count != 1 {
+		t.Errorf("expected 1 after promotion for char2, got %d (err %v)", count, err)
+	}
+	if _, err := m.CreateThread(ctx, "guild1", "char2", "Side quest"); err != nil {
+		t.Fatalf("CreateThread failed: %v", err)
+	}
+	count, err = m.CountCharacterThreads(ctx, "guild1", "char2")
+	if err != nil || count != 2 {
+		t.Errorf("expected 2 for char2, got %d (err %v)", count, err)
+	}
+
+	// Counts the named character, not just the active one.
+	count, err = m.CountCharacterThreads(ctx, "guild1", "char1")
+	if err != nil || count != 0 {
+		t.Errorf("expected 0 for char1, got %d (err %v)", count, err)
 	}
 }

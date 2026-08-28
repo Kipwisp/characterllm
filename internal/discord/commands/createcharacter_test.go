@@ -345,7 +345,7 @@ func TestHandleSetCharacterImage_EdgeCases(t *testing.T) {
 
 			guildID := "guild1"
 			sm := cmdCtx.Session
-			sm.SaveImageCandidates(context.Background(), guildID, tt.candidates)
+			sm.SaveImageCandidates(context.Background(), "tok1", tt.candidates)
 
 			var capturedContent string
 			s.InteractionRespondFn = func(interaction *discordgo.Interaction, response *discordgo.InteractionResponse) error {
@@ -357,7 +357,7 @@ func TestHandleSetCharacterImage_EdgeCases(t *testing.T) {
 				Interaction: &discordgo.Interaction{
 					Type: discordgo.InteractionMessageComponent,
 					Data: discordgo.MessageComponentInteractionData{
-						CustomID: "select_char_image",
+						CustomID: setCharacterImagePrefix + "tok1",
 						Values:   tt.values,
 					},
 				},
@@ -391,7 +391,7 @@ func TestHandleSetCharacterImage_Success(t *testing.T) {
 	})
 	sm.SetActiveCharacter(context.Background(), guildID, charID)
 	sm.SetCharacterImage(context.Background(), guildID, charID, selectedURL)
-	sm.SaveImageCandidates(context.Background(), guildID, []string{selectedURL})
+	sm.SaveImageCandidates(context.Background(), "tok2", []string{selectedURL})
 
 	// Mock Image Client
 	mockImg := &mockImageClient{
@@ -420,7 +420,7 @@ func TestHandleSetCharacterImage_Success(t *testing.T) {
 				GuildID: guildID,
 			},
 			Data: discordgo.MessageComponentInteractionData{
-				CustomID: "select_char_image",
+				CustomID: setCharacterImagePrefix + "tok2",
 				Values:   []string{"0"},
 			},
 		},
@@ -429,7 +429,7 @@ func TestHandleSetCharacterImage_Success(t *testing.T) {
 	(&createCharacterCmd{session: cmdCtx.Session, imageClient: cmdCtx.ImageClient}).handleImageSelection(context.Background(), s, i)
 
 	// Verify candidates are cleared
-	candidates, _ := sm.GetImageCandidates(context.Background(), guildID)
+	candidates, _ := sm.GetImageCandidates(context.Background(), "tok2")
 	if len(candidates) != 0 {
 		t.Errorf("Expected image candidates to be cleared, got %v", candidates)
 	}
@@ -526,7 +526,8 @@ func TestCreateCharacterCmd_AvatarOptionsRow(t *testing.T) {
 		t.Errorf("expected option descriptions from included urls, got %q, %q", menu.Options[0].Description, menu.Options[1].Description)
 	}
 
-	candidates, err := cmdCtx.Session.GetImageCandidates(context.Background(), "guild1")
+	menuToken := strings.TrimPrefix(menu.CustomID, setCharacterImagePrefix)
+	candidates, err := cmdCtx.Session.GetImageCandidates(context.Background(), menuToken)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -708,8 +709,9 @@ func TestCreateCharacterCmd_ModelPickNoChoiceFallsBackToMenu(t *testing.T) {
 	if !strings.Contains(*edit.Content, responses.CreateCharacter.SelectPicture) {
 		t.Errorf("expected the manual selection prompt, got %q", *edit.Content)
 	}
-	findSelectMenu(t, *edit.Components)
-	candidates, err := cmdCtx.Session.GetImageCandidates(context.Background(), "guild1")
+	menu := findSelectMenu(t, *edit.Components)
+	menuToken := strings.TrimPrefix(menu.CustomID, setCharacterImagePrefix)
+	candidates, err := cmdCtx.Session.GetImageCandidates(context.Background(), menuToken)
 	if err != nil || len(candidates) != 2 {
 		t.Errorf("expected candidates saved for the manual menu, got %v (%v)", candidates, err)
 	}

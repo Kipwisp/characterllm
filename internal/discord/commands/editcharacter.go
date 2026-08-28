@@ -2,8 +2,6 @@ package commands
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"strings"
 	"sync"
@@ -93,12 +91,6 @@ func (c *editCharacterCmd) dropPending(token string) {
 	c.pendingMu.Lock()
 	delete(c.pendingEdits, token)
 	c.pendingMu.Unlock()
-}
-
-func newEditToken() string {
-	b := make([]byte, 8)
-	rand.Read(b)
-	return strings.ToLower(hex.EncodeToString(b))
 }
 
 // Definition returns the Discord application command definition for editing a saved character.
@@ -253,7 +245,7 @@ func (c *editCharacterCmd) proposeRewrite(ctx context.Context, s DiscordSession,
 		return err
 	}
 
-	token := newEditToken()
+	token := newComponentToken()
 	c.pendingMu.Lock()
 	if c.pendingEdits == nil {
 		c.pendingEdits = map[string]*pendingEdit{}

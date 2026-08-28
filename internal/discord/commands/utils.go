@@ -2,6 +2,8 @@ package commands
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -49,6 +51,14 @@ const currentCardName = "current"
 // thread.
 const currentThreadKey = currentCardName
 
+// newComponentToken returns a random hex token that makes a message
+// component custom ID unique per interaction.
+func newComponentToken() string {
+	b := make([]byte, 8)
+	rand.Read(b)
+	return strings.ToLower(hex.EncodeToString(b))
+}
+
 // ErrCardNotFound is returned by resolveCard when no saved character matches.
 var ErrCardNotFound = errors.New("character not found")
 
@@ -57,7 +67,7 @@ const cardAmbiguityMaxLines = 10
 
 // Message component custom IDs.
 const (
-	setCharacterImageID       = "select_char_image"
+	setCharacterImagePrefix   = "select_char_image_"
 	deleteConfirmPrefix       = "delete_confirm_"
 	deleteCancelPrefix        = "delete_cancel_"
 	deleteThreadConfirmPrefix = "delete_thread_confirm_"

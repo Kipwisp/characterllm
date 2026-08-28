@@ -19,15 +19,19 @@ type Thread struct {
 	Active   bool
 }
 
+// threadStore persists the per-character conversation threads and the
+// active thread pointer.
+type threadStore struct{ *core }
+
 // EnsureDefaultThread gives a character its default thread (ID 1, named
 // "Thread 1") when it has no threads yet, and points the active thread at
 // the most recently used one whenever the pointer is unset.
-func (m *Manager) EnsureDefaultThread(ctx context.Context, guildID, characterID string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+func (s *threadStore) EnsureDefaultThread(ctx context.Context, guildID, characterID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	var cardCount int
-	err := m.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_cards WHERE guild_id = ? AND character_id = ?", guildID, characterID).Scan(&cardCount)
+	err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_cards WHERE guild_id = ? AND character_id = ?", guildID, characterID).Scan(&cardCount)
 	if err != nil {
 		return fmt.Errorf("failed to look up character %s in guild %s: %w", characterID, guildID, err)
 	}
@@ -36,19 +40,19 @@ func (m *Manager) EnsureDefaultThread(ctx context.Context, guildID, characterID 
 	}
 
 	var count int
-	err = m.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM threads WHERE guild_id = ? AND character_id = ?", guildID, characterID).Scan(&count)
+	err = s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM threads WHERE guild_id = ? AND character_id = ?", guildID, characterID).Scan(&count)
 	if err != nil {
 		return fmt.Errorf("failed to count threads for character %s in guild %s: %w", characterID, guildID, err)
 	}
 	if count == 0 {
-		if _, err := m.db.ExecContext(ctx, `INSERT INTO threads (guild_id, character_id, thread_id, name, last_used_seq)
+		if _, err := s.db.ExecContext(ctx, `INSERT INTO threads (guild_id, character_id, thread_id, name, last_used_seq)
 			VALUES (?, ?, '1', 'Thread 1', COALESCE((SELECT MAX(last_used_seq) FROM threads WHERE guild_id = ? AND character_id = ?), 0) + 1)`,
 			guildID, characterID, guildID, characterID); err != nil {
 			return fmt.Errorf("failed to create default thread for character %s in guild %s: %w", characterID, guildID, err)
 		}
 	}
 
-	_, err = m.db.ExecContext(ctx, `
+	_, err = s.db.ExecContext(ctx, `
 		UPDATE character_cards
 		SET active_thread_id = (
 			SELECT thread_id FROM threads
@@ -66,12 +70,12 @@ func (m *Manager) EnsureDefaultThread(ctx context.Context, guildID, characterID 
 
 // GetActiveThreadID returns the character's active thread ID, or an empty
 // string when the character is unknown or has no active thread set.
-func (m *Manager) GetActiveThreadID(ctx context.Context, guildID, characterID string) (string, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+func (s *threadStore) GetActiveThreadID(ctx context.Context, guildID, characterID string) (string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
 	var id string
-	err := m.db.QueryRowContext(ctx, "SELECT COALESCE(active_thread_id, '') FROM character_cards WHERE guild_id = ? AND character_id = ?", guildID, characterID).Scan(&id)
+	err := s.db.QueryRowContext(ctx, "SELECT COALESCE(active_thread_id, '') FROM character_cards WHERE guild_id = ? AND character_id = ?", guildID, characterID).Scan(&id)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return "", nil
@@ -84,11 +88,11 @@ func (m *Manager) GetActiveThreadID(ctx context.Context, guildID, characterID st
 // CreateThread mints a new thread for a character and makes it active. The
 // thread ID is the smallest unused positive integer, so IDs start at 1 and a
 // deleted thread's ID is reused by the next created thread.
-func (m *Manager) CreateThread(ctx context.Context, guildID, characterID, name string) (*Thread, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+func (s *threadStore) CreateThread(ctx context.Context, guildID, characterID, name string) (*Thread, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	tx, err := m.db.BeginTx(ctx, nil)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
@@ -155,11 +159,11 @@ func mintThreadID(tx *sql.Tx, guildID, characterID string) (string, error) {
 }
 
 // ListThreads returns the character's threads, most recently used first.
-func (m *Manager) ListThreads(ctx context.Context, guildID, characterID string) ([]*Thread, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+func (s *threadStore) ListThreads(ctx context.Context, guildID, characterID string) ([]*Thread, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
-	rows, err := m.db.Query(`
+	rows, err := s.db.Query(`
 		SELECT thread_id, name FROM threads
 		WHERE guild_id = ? AND character_id = ?
 		ORDER BY last_used_seq DESC, created_at DESC, thread_id ASC`, guildID, characterID)
@@ -181,7 +185,7 @@ func (m *Manager) ListThreads(ctx context.Context, guildID, characterID string) 
 	}
 
 	var active string
-	err = m.db.QueryRow("SELECT COALESCE(active_thread_id, '') FROM character_cards WHERE guild_id = ? AND character_id = ?", guildID, characterID).Scan(&active)
+	err = s.db.QueryRow("SELECT COALESCE(active_thread_id, '') FROM character_cards WHERE guild_id = ? AND character_id = ?", guildID, characterID).Scan(&active)
 	if err != nil && err != sql.ErrNoRows {
 		return nil, fmt.Errorf("failed to get active thread for character %s in guild %s: %w", characterID, guildID, err)
 	}
@@ -195,12 +199,12 @@ func (m *Manager) ListThreads(ctx context.Context, guildID, characterID string) 
 
 // GetThread returns one of the character's threads by ID, or nil when no
 // such thread exists.
-func (m *Manager) GetThread(ctx context.Context, guildID, characterID, threadID string) (*Thread, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+func (s *threadStore) GetThread(ctx context.Context, guildID, characterID, threadID string) (*Thread, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
 	var th Thread
-	err := m.db.QueryRow(`
+	err := s.db.QueryRow(`
 		SELECT thread_id, name FROM threads
 		WHERE guild_id = ? AND character_id = ? AND thread_id = ?`, guildID, characterID, threadID).Scan(&th.ThreadID, &th.Name)
 	if err != nil {
@@ -211,7 +215,7 @@ func (m *Manager) GetThread(ctx context.Context, guildID, characterID, threadID 
 	}
 
 	var active string
-	err = m.db.QueryRow("SELECT COALESCE(active_thread_id, '') FROM character_cards WHERE guild_id = ? AND character_id = ?", guildID, characterID).Scan(&active)
+	err = s.db.QueryRow("SELECT COALESCE(active_thread_id, '') FROM character_cards WHERE guild_id = ? AND character_id = ?", guildID, characterID).Scan(&active)
 	if err == nil && active == threadID {
 		th.Active = true
 	}
@@ -219,11 +223,11 @@ func (m *Manager) GetThread(ctx context.Context, guildID, characterID, threadID 
 }
 
 // SetActiveThread makes the named thread the character's active thread.
-func (m *Manager) SetActiveThread(ctx context.Context, guildID, characterID, threadID string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+func (s *threadStore) SetActiveThread(ctx context.Context, guildID, characterID, threadID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	tx, err := m.db.BeginTx(ctx, nil)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
@@ -251,11 +255,11 @@ func (m *Manager) SetActiveThread(ctx context.Context, guildID, characterID, thr
 
 // TouchThread records a thread as used now, keeping "most recently used"
 // ordering current even for threads that have no history yet.
-func (m *Manager) TouchThread(ctx context.Context, guildID, characterID, threadID string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+func (s *threadStore) TouchThread(ctx context.Context, guildID, characterID, threadID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	if _, err := m.db.ExecContext(ctx, `UPDATE threads SET last_used_seq = COALESCE((SELECT MAX(last_used_seq) FROM threads WHERE guild_id = ? AND character_id = ?), 0) + 1
+	if _, err := s.db.ExecContext(ctx, `UPDATE threads SET last_used_seq = COALESCE((SELECT MAX(last_used_seq) FROM threads WHERE guild_id = ? AND character_id = ?), 0) + 1
 		WHERE guild_id = ? AND character_id = ? AND thread_id = ?`, guildID, characterID, guildID, characterID, threadID); err != nil {
 		return fmt.Errorf("failed to touch thread %s for character %s in guild %s: %w", threadID, characterID, guildID, err)
 	}
@@ -267,11 +271,11 @@ func (m *Manager) TouchThread(ctx context.Context, guildID, characterID, threadI
 // the thread itself survives; it reports whether that is what happened.
 // Deleting the active thread hands the active pointer to the most recently
 // used surviving thread.
-func (m *Manager) DeleteThread(ctx context.Context, guildID, characterID, threadID string) (bool, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+func (s *threadStore) DeleteThread(ctx context.Context, guildID, characterID, threadID string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	tx, err := m.db.BeginTx(ctx, nil)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, fmt.Errorf("failed to begin transaction: %w", err)
 	}
@@ -321,4 +325,18 @@ func (m *Manager) DeleteThread(ctx context.Context, guildID, characterID, thread
 		return false, fmt.Errorf("failed to commit thread deletion: %w", err)
 	}
 	return count == 1, nil
+}
+
+// CountCharacterThreads returns the number of threads a single character
+// has.
+func (s *threadStore) CountCharacterThreads(ctx context.Context, guildID, characterID string) (int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var count int
+	err := s.db.QueryRow("SELECT COUNT(*) FROM threads WHERE guild_id = ? AND character_id = ?", guildID, characterID).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count threads for character %s in guild %s: %w", characterID, guildID, err)
+	}
+	return count, nil
 }
