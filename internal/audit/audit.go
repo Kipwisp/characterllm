@@ -18,6 +18,7 @@ type Kind string
 
 const (
 	KindChat       Kind = "chat"
+	KindAmbient    Kind = "ambient"
 	KindAnalysis   Kind = "analysis"
 	KindSynthesis  Kind = "synthesis"
 	KindCompaction Kind = "compaction"

@@ -14,6 +14,8 @@ type MockDiscordSession struct {
 	ChannelMessageSendComplexFn func(channelID string, msg *discordgo.MessageSend) (*discordgo.Message, error)
 	ChannelMessageEditComplexFn func(channelID, messageID string, edit *discordgo.MessageEdit) (*discordgo.Message, error)
 	ChannelMessageDeleteFn      func(channelID, messageID string) error
+	ChannelMessagesFn           func(channelID string, limit int, beforeID, afterID, aroundID string) ([]*discordgo.Message, error)
+	GuildChannelsFn             func(guildID string) ([]*discordgo.Channel, error)
 	InteractionRespondFn        func(interaction *discordgo.Interaction, response *discordgo.InteractionResponse) error
 	InteractionResponseEditFn   func(interaction *discordgo.Interaction, edit *discordgo.WebhookEdit) (*discordgo.Message, error)
 	GuildMemberNicknameFn       func(guildID string, member string, nickname string) error
@@ -63,6 +65,20 @@ func (m *MockDiscordSession) ChannelMessageDelete(channelID, messageID string) e
 		return nil
 	}
 	return m.ChannelMessageDeleteFn(channelID, messageID)
+}
+
+func (m *MockDiscordSession) ChannelMessages(channelID string, limit int, beforeID, afterID, aroundID string) ([]*discordgo.Message, error) {
+	if m.ChannelMessagesFn == nil {
+		return nil, nil
+	}
+	return m.ChannelMessagesFn(channelID, limit, beforeID, afterID, aroundID)
+}
+
+func (m *MockDiscordSession) GuildChannels(guildID string) ([]*discordgo.Channel, error) {
+	if m.GuildChannelsFn == nil {
+		return nil, nil
+	}
+	return m.GuildChannelsFn(guildID)
 }
 
 func (m *MockDiscordSession) InteractionRespond(interaction *discordgo.Interaction, response *discordgo.InteractionResponse) error {

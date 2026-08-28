@@ -50,6 +50,7 @@ type core struct {
 type Manager struct {
 	*core
 	*characterStore
+	*guildStore
 	*historyStore
 	*imageCandidateStore
 	*summaryStore
@@ -72,6 +73,7 @@ func NewManager(dbPath string, defaultPrompt string) (*Manager, error) {
 	m := &Manager{
 		core:                c,
 		characterStore:      &characterStore{c},
+		guildStore:          &guildStore{c},
 		historyStore:        &historyStore{c},
 		imageCandidateStore: &imageCandidateStore{c},
 		summaryStore:        &summaryStore{c},
@@ -94,7 +96,8 @@ func (m *Manager) initDB() error {
 	queries := []string{
 		`CREATE TABLE IF NOT EXISTS guild_config (
 			guild_id TEXT PRIMARY KEY,
-			active_character_id TEXT
+			active_character_id TEXT,
+			ambient_channel_id TEXT
 		);`,
 		`CREATE TABLE IF NOT EXISTS character_cards (
 			guild_id TEXT,

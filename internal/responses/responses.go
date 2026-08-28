@@ -162,6 +162,16 @@ var (
 		Error:    "Sorry, I couldn't switch threads.",
 	}
 
+	AmbientChannel = struct {
+		Success string
+		Cleared string
+		Error   string
+	}{
+		Success: "I'll occasionally speak on my own in %s, as the active character.",
+		Cleared: "Ambient channel cleared — I'll stop speaking on my own.",
+		Error:   "Sorry, I couldn't update the ambient channel.",
+	}
+
 	DeleteThread = struct {
 		ConfirmDelete string
 		ConfirmClear  string

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"characterllm/internal/audit"
 	"characterllm/internal/conversation"
 	"characterllm/internal/llm"
 	"characterllm/internal/session"
@@ -640,7 +641,7 @@ func TestProcessChat_Error(t *testing.T) {
 	}
 	m.GuildID = "guild1"
 
-	err := c.processChat(context.Background(), s, m, "", "char1", "prompt", []llm.Message{}, "req1")
+	err := c.processChat(context.Background(), s, m.GuildID, m.ChannelID, &discordgo.MessageReference{MessageID: m.ID}, "", "char1", "prompt", []llm.Message{}, "req1", audit.KindChat)
 
 	if err == nil {
 		t.Error("Expected error, got nil")

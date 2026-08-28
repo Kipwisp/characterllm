@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -119,12 +120,22 @@ func main() {
 
 	bot.RegisterCommands(commandRegistry.Definitions())
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if cfg.Ambient.Enabled {
+		ambient := discord.NewAmbient(sessionMgr, chat, cfg, imageClient, discord.NewSessionWrapper(bot.Session))
+		go ambient.Run(ctx)
+		slog.Info("ambient scheduler started")
+	}
+
 	slog.Info("bot is now running. Press CTRL-C to exit.")
 
 	// Wait for termination signal
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	<-stop
+	cancel()
 
 	slog.Info("shutting down")
 }

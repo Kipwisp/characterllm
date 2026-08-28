@@ -16,6 +16,7 @@ type Config struct {
 	Search  SearchConfig
 	Images  ImageConfig
 	Invite  InviteConfig
+	Ambient AmbientConfig
 	General GeneralConfig
 }
 
@@ -72,6 +73,18 @@ type InviteConfig struct {
 	CommandEnabled bool
 }
 
+type AmbientConfig struct {
+	// Enabled starts the ambient scheduler and registers /setambientchannel.
+	Enabled bool
+	// MinSeconds/MaxSeconds bound the random sleep between ambient ticks.
+	MinSeconds int
+	MaxSeconds int
+	// ReplyCount is how many recent channel messages the reply mode reads.
+	ReplyCount int
+	// TickProbability is the per-tick chance an ambient turn actually runs.
+	TickProbability float64
+}
+
 type GeneralConfig struct {
 	LogLevel  string
 	TopicRate string
@@ -122,12 +135,32 @@ func LoadConfig() *Config {
 		Invite: InviteConfig{
 			CommandEnabled: getEnvBool("INVITE_COMMAND_ENABLED", true),
 		},
+		Ambient: loadAmbientConfig(),
 		General: GeneralConfig{
 			LogLevel:        getEnv("LOG_LEVEL", "INFO"),
 			TopicRate:       getEnv("TOPIC_RATE", "10000"),
 			ConversationLog: getEnvBool("CONVERSATION_LOG", true),
 		},
 	}
+}
+
+func loadAmbientConfig() AmbientConfig {
+	c := AmbientConfig{
+		Enabled:         getEnvBool("AMBIENT_ENABLED", true),
+		MinSeconds:      getEnvInt("AMBIENT_MIN_SECONDS", 120),
+		MaxSeconds:      getEnvInt("AMBIENT_MAX_SECONDS", 600),
+		ReplyCount:      getEnvInt("AMBIENT_REPLY_COUNT", 5),
+		TickProbability: getEnvFloat("AMBIENT_TICK_PROBABILITY", 0.5),
+	}
+	if c.MaxSeconds < c.MinSeconds {
+		c.MaxSeconds = c.MinSeconds
+	}
+	if c.TickProbability < 0 {
+		c.TickProbability = 0
+	} else if c.TickProbability > 1 {
+		c.TickProbability = 1
+	}
+	return c
 }
 
 func getEnv(key, fallback string) string {

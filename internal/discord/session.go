@@ -49,6 +49,14 @@ func (w *sessionWrapper) ChannelMessageDelete(channelID, messageID string) error
 	return w.s.ChannelMessageDelete(channelID, messageID)
 }
 
+func (w *sessionWrapper) ChannelMessages(channelID string, limit int, beforeID, afterID, aroundID string) ([]*discordgo.Message, error) {
+	return w.s.ChannelMessages(channelID, limit, beforeID, afterID, aroundID)
+}
+
+func (w *sessionWrapper) GuildChannels(guildID string) ([]*discordgo.Channel, error) {
+	return w.s.GuildChannels(guildID)
+}
+
 func (w *sessionWrapper) InteractionRespond(interaction *discordgo.Interaction, response *discordgo.InteractionResponse) error {
 	return w.s.InteractionRespond(interaction, response)
 }
