@@ -102,6 +102,9 @@ func TestSetAvatarCmd(t *testing.T) {
 				savedURL = url
 				return tmpImg.Name(), nil
 			},
+			GetImageFn: func(g, c string) (string, error) {
+				return tmpImg.Name(), nil
+			},
 			ImageToBase64Fn: func(ctx context.Context, path string) (string, error) {
 				return "data:image/png;base64,abc", nil
 			},

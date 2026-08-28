@@ -13,6 +13,7 @@ type Config struct {
 	Discord DiscordConfig
 	LLM     LLMConfig
 	Prompts PromptConfig
+	Search  SearchConfig
 	Images  ImageConfig
 	General GeneralConfig
 }
@@ -39,6 +40,10 @@ type LLMConfig struct {
 	// MaxImages bounds how many image attachments per message are forwarded
 	// to the model.
 	MaxImages int
+	// AvatarPick lets a vision LLM choose the character's avatar from the
+	// candidate row during /createcharacter, instead of the user picking
+	// from the select menu. Only effective when Vision is also enabled.
+	AvatarPick bool
 }
 
 type PromptConfig struct {
@@ -49,11 +54,16 @@ type PromptConfig struct {
 	EditSectionPath string
 }
 
-type ImageConfig struct {
-	Provider   string
-	SearXNGURL string
+type SearchConfig struct {
+	Provider       string
+	SearXNGURL     string
+	SearXNGEngines string
+	// MaxResults bounds the number of search results per query.
 	MaxResults int
-	CacheDir   string
+}
+
+type ImageConfig struct {
+	CacheDir string
 }
 
 type GeneralConfig struct {
@@ -79,13 +89,14 @@ func LoadConfig() *Config {
 			URL:                 getEnv("LLM_URL", "http://localhost:8080/v1/chat/completions"),
 			Model:               getEnv("LLM_MODEL", ""),
 			MaxRetries:          getEnvInt("LLM_MAX_RETRIES", 2),
-			MaxContext:          getEnvInt("LLM_MAX_CONTEXT", 4096),
+			MaxContext:          getEnvInt("LLM_MAX_CONTEXT", 10000),
 			CompactionThreshold: getEnvFloat("LLM_COMPACTION_THRESHOLD", 0.9),
 			RecentMemoryWindow:  getEnvInt("LLM_RECENT_MEMORY_WINDOW", 15),
-			SummaryMaxTokens:    getEnvInt("LLM_SUMMARY_MAX_TOKENS", 1024),
+			SummaryMaxTokens:    getEnvInt("LLM_SUMMARY_MAX_TOKENS", 2048),
 			TimeoutSeconds:      getEnvInt("LLM_TIMEOUT_SECONDS", 120),
 			Vision:              getEnvBool("LLM_VISION", false),
 			MaxImages:           getEnvInt("LLM_MAX_IMAGES", 2),
+			AvatarPick:          getEnvBool("LLM_AVATAR_PICK", false),
 		},
 		Prompts: PromptConfig{
 			SystemPath:      getEnv("SYSTEM_PROMPT_PATH", "prompts/system_prompt.md"),
@@ -94,11 +105,14 @@ func LoadConfig() *Config {
 			AnalyzerPath:    getEnv("ANALYZER_PROMPT_PATH", "prompts/analyzer_prompt.md"),
 			EditSectionPath: getEnv("EDIT_SECTION_PROMPT_PATH", "prompts/edit_section_prompt.md"),
 		},
+		Search: SearchConfig{
+			Provider:       getEnv("SEARCH_PROVIDER", "searxng"),
+			SearXNGURL:     getEnv("SEARXNG_URL", "http://localhost:8080"),
+			SearXNGEngines: getEnv("SEARXNG_ENGINES", ""),
+			MaxResults:     getEnvInt("MAX_SEARCH_RESULTS", 3),
+		},
 		Images: ImageConfig{
-			Provider:   getEnv("IMAGE_PROVIDER", "searxng"),
-			SearXNGURL: getEnv("SEARXNG_URL", "http://localhost:8080"),
-			MaxResults: getEnvInt("MAX_SEARCH_RESULTS", 3),
-			CacheDir:   getEnv("IMAGE_CACHE_DIR", "images/cache"),
+			CacheDir: getEnv("IMAGE_CACHE_DIR", "images/cache"),
 		},
 		General: GeneralConfig{
 			LogLevel:        getEnv("LOG_LEVEL", "INFO"),

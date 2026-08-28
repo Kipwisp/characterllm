@@ -16,12 +16,14 @@ var (
 		Ambiguous      string
 		Injection      string
 		SelectPicture  string
+		PickFailed     string
 	}{
 		AnalysisFailed: "I had trouble understanding your request: %v",
 		Unknown:        "I couldn't find any reliable information on '%s'. Could you provide more details or the series they are from?",
 		Ambiguous:      "I found multiple characters named '%s':\n%s\nPlease be more specific!",
 		Injection:      "Nice try! I'm not falling for that prompt injection. Please provide a valid character name.",
 		SelectPicture:  "Please select a profile picture:",
+		PickFailed:     "I couldn't confidently pick a profile picture on my own.",
 	}
 
 	SetCharacter = struct {
@@ -59,7 +61,7 @@ var (
 		NotFound:   "The selected character card no longer exists or is unavailable.",
 		SetError:   "An error occurred while setting the character.",
 		SetSuccess: "Character set to **%s**!",
-	SetDetail:  "\nCharacter: %s",
+		SetDetail:  "\nCharacter: %s",
 	}
 
 	CharacterResolution = struct {

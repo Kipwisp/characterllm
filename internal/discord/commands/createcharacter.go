@@ -3,12 +3,14 @@ package commands
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 	"time"
 
 	"characterllm/internal/audit"
+	"characterllm/internal/config"
 	"characterllm/internal/images"
 	"characterllm/internal/logger"
 	"characterllm/internal/research"
@@ -33,6 +35,18 @@ type createCharacterCmd struct {
 	imageClient images.ImageClient
 	synthesizer research.Synthesizer
 	audit       *audit.AuditLogger
+	config      *config.Config
+}
+
+// createResult carries everything the avatar finalization needs out of the
+// research pipeline.
+type createResult struct {
+	card          *session.CharacterCard
+	candidates    []string
+	rowBytes      []byte
+	titles        map[string]string
+	avatarChoice  int
+	pickAttempted bool
 }
 
 // Definition returns the Discord application command definition for researching and creating a character persona card.
@@ -65,16 +79,16 @@ func (c *createCharacterCmd) Execute(ctx context.Context, s DiscordSession, i *d
 		},
 	})
 
-	card, err := c.fetchAndSetupCharacter(ctx, s, i, userInput)
+	result, err := c.fetchAndSetupCharacter(ctx, s, i, userInput)
 	if err != nil {
 		return err
 	}
 
-	if err := ApplyCharacterAvatar(ctx, c.imageClient, s, i.GuildID, card.CharacterID, card.ImageURL); err != nil {
+	if err := ApplyCharacterAvatar(ctx, c.imageClient, s, i.GuildID, result.card.CharacterID, result.card.ImageURL); err != nil {
 		logger.FromContext(ctx).Warn("failed to apply character avatar", "error", err, "guild_id", i.GuildID)
 	}
 
-	return c.searchAndProcessImages(ctx, s, i, card)
+	return c.finalizeAvatar(ctx, s, i, result)
 }
 
 func (c *createCharacterCmd) parseDescriptionOption(s DiscordSession, i *discordgo.InteractionCreate) (string, error) {
@@ -97,7 +111,7 @@ func (c *createCharacterCmd) parseDescriptionOption(s DiscordSession, i *discord
 	return opt.StringValue(), nil
 }
 
-func (c *createCharacterCmd) fetchAndSetupCharacter(ctx context.Context, s DiscordSession, i *discordgo.InteractionCreate, userInput string) (*session.CharacterCard, error) {
+func (c *createCharacterCmd) fetchAndSetupCharacter(ctx context.Context, s DiscordSession, i *discordgo.InteractionCreate, userInput string) (*createResult, error) {
 
 	synth := c.synthesizer
 
@@ -149,9 +163,21 @@ func (c *createCharacterCmd) fetchAndSetupCharacter(ctx context.Context, s Disco
 		return nil, fmt.Errorf("unexpected analysis status: %s", analysis.Status)
 	}
 
+	// Avatar candidates
+	candidates, rowBytes, titles := c.fetchAvatarCandidates(ctx, analysis)
+
+	var imageURIs []string
+	if c.config.LLM.AvatarPick && len(candidates) > 0 {
+		if c.config.LLM.Vision {
+			imageURIs = []string{utils.PNGDataURI(rowBytes)}
+		} else {
+			logger.FromContext(ctx).Info("avatar model pick enabled but LLM vision is disabled; falling back to manual selection")
+		}
+	}
+
 	// Research and Synthesize
 	start := time.Now()
-	res, err := synth.FetchCharacter(ctx, analysis)
+	res, err := synth.FetchCharacter(ctx, analysis, imageURIs, len(candidates))
 	latency := time.Since(start)
 	if err != nil {
 		s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
@@ -161,10 +187,18 @@ func (c *createCharacterCmd) fetchAndSetupCharacter(ctx context.Context, s Disco
 	}
 
 	// Log the synthesis to the conversation audit trail
+	synthesisPrompt := fmt.Sprintf("Request: %s\n\nResearch Dossier:\n%s", userInput, res.ResearchData)
+	if len(candidates) > 0 {
+		pick := "none"
+		if len(imageURIs) > 0 && res.AvatarChoice > 0 {
+			pick = fmt.Sprintf("%d of %d", res.AvatarChoice, len(candidates))
+		}
+		synthesisPrompt += fmt.Sprintf("\n\nAvatar candidates: %d (model pick: %s)", len(candidates), pick)
+	}
 	c.audit.Log(ctx, i.GuildID, "", characterID, uuid.New().String(), audit.Turn{
 		Kind:      audit.KindSynthesis,
 		Latency:   latency,
-		Prompt:    fmt.Sprintf("Request: %s\n\nResearch Dossier:\n%s", userInput, res.ResearchData),
+		Prompt:    synthesisPrompt,
 		Reasoning: res.Reasoning,
 		Response:  res.PersonaSpec,
 	})
@@ -209,38 +243,38 @@ func (c *createCharacterCmd) fetchAndSetupCharacter(ctx context.Context, s Disco
 		logger.FromContext(ctx).Error("could not update bot nickname", "error", err, "guild_id", i.GuildID)
 	}
 
-	return finalCard, nil
+	return &createResult{
+		card:          finalCard,
+		candidates:    candidates,
+		rowBytes:      rowBytes,
+		titles:        titles,
+		avatarChoice:  res.AvatarChoice,
+		pickAttempted: len(imageURIs) > 0,
+	}, nil
 }
 
-func (c *createCharacterCmd) searchAndProcessImages(ctx context.Context, s DiscordSession, i *discordgo.InteractionCreate, card *session.CharacterCard) error {
+// fetchAvatarCandidates searches for candidate profile pictures and composes
+// them into a row. Any failure degrades to no candidates (no images on the
+// synthesis call, no avatar menu), which matches the pre-feature behavior.
+func (c *createCharacterCmd) fetchAvatarCandidates(ctx context.Context, analysis *research.AnalysisResult) ([]string, []byte, map[string]string) {
 	if c.imageClient == nil {
 		logger.FromContext(ctx).Error("no image client available")
-		return fmt.Errorf("no image client available")
+		return nil, nil, nil
 	}
-	imgResults, err := c.imageClient.SearchImages(ctx, fmt.Sprintf("%s profile picture", card.DisplayName), avatarSearchLimit)
+	query := fmt.Sprintf("%s profile picture", analysis.DisplayName)
+	if analysis.Series != "" {
+		query = fmt.Sprintf("%s (%s) profile picture", analysis.DisplayName, analysis.Series)
+	}
+	imgResults, err := c.imageClient.SearchImages(ctx, query, avatarSearchLimit)
 	if err != nil {
 		logger.FromContext(ctx).Warn("image search failed", "error", err)
-		_, errEdit := s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
-			Content: utils.PtrString(formatCharacterSetMessage(card)),
-		})
-		if errEdit != nil {
-			logger.FromContext(ctx).Error("error editing interaction response after search failure", "error", errEdit)
-		}
-		return err
+		return nil, nil, nil
 	}
 
 	if len(imgResults) == 0 {
-		logger.FromContext(ctx).Info("no images found", "character", card.DisplayName)
-		_, errEdit := s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
-			Content: utils.PtrString(formatCharacterSetMessage(card)),
-		})
-		if errEdit != nil {
-			logger.FromContext(ctx).Error("error editing interaction response for empty results", "error", errEdit)
-		}
-		return nil
+		logger.FromContext(ctx).Info("no images found", "character", analysis.DisplayName)
+		return nil, nil, nil
 	}
-
-	logger.FromContext(ctx).Info("found images", "count", len(imgResults), "character", card.DisplayName)
 
 	var urls []string
 	titles := make(map[string]string, len(imgResults))
@@ -249,19 +283,61 @@ func (c *createCharacterCmd) searchAndProcessImages(ctx context.Context, s Disco
 		titles[img.URL] = img.Title
 	}
 
-	// Download the candidates and tile them into a single row image. We
+	// Download the candidates and tile them into a single row image.
 	// Candidates that fail to fetch are skipped, so the row still fills
 	// up to avatarRowLimit options.
 	rowBytes, included, err := c.imageClient.ComposeRow(ctx, urls, avatarRowLimit)
 	if err != nil || len(included) == 0 {
 		logger.FromContext(ctx).Warn("no avatar options could be fetched", "error", err)
+		return nil, nil, nil
+	}
+
+	logger.FromContext(ctx).Info("found images", "count", len(included), "character", analysis.DisplayName)
+	return included, rowBytes, titles
+}
+
+// finalizeAvatar applies the model's avatar pick when it is valid, otherwise
+// offers the candidates in the manual select menu.
+func (c *createCharacterCmd) finalizeAvatar(ctx context.Context, s DiscordSession, i *discordgo.InteractionCreate, r *createResult) error {
+	if r.isModelPickValid() {
+		if err := c.applyAvatar(ctx, s, i.GuildID, r.card.CharacterID, r.candidates[r.avatarChoice-1]); err != nil {
+			logger.FromContext(ctx).Warn("failed to apply model-picked avatar, falling back to manual selection", "error", err, "guild_id", i.GuildID, "character_id", r.card.CharacterID)
+		} else {
+			logger.FromContext(ctx).Info("model-picked avatar applied", "guild_id", i.GuildID, "character_id", r.card.CharacterID, "index", r.avatarChoice)
+			_, errEdit := s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
+				Content: utils.PtrString(formatCharacterSetMessage(r.card)),
+			})
+			if errEdit != nil {
+				logger.FromContext(ctx).Error("error editing interaction response after avatar pick", "error", errEdit)
+			}
+			return nil
+		}
+	}
+	return c.renderAvatarMenu(ctx, s, i, r, r.pickAttempted)
+}
+
+// isModelPickValid reports whether the model was shown candidates and picked
+// one of them.
+func (r *createResult) isModelPickValid() bool {
+	return r.pickAttempted && r.avatarChoice >= 1 && r.avatarChoice <= len(r.candidates)
+}
+
+// renderAvatarMenu shows the candidate row with a manual select menu, or a
+// plain confirmation message when no candidates are available.
+func (c *createCharacterCmd) renderAvatarMenu(ctx context.Context, s DiscordSession, i *discordgo.InteractionCreate, r *createResult, pickFailed bool) error {
+	if len(r.candidates) == 0 {
 		_, errEdit := s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
-			Content: utils.PtrString(formatCharacterSetMessage(card)),
+			Content: utils.PtrString(formatCharacterSetMessage(r.card)),
 		})
 		if errEdit != nil {
-			logger.FromContext(ctx).Error("error editing interaction response after compose failure", "error", errEdit)
+			logger.FromContext(ctx).Error("error editing interaction response for empty results", "error", errEdit)
 		}
 		return nil
+	}
+
+	prompt := responses.CreateCharacter.SelectPicture
+	if pickFailed {
+		prompt = responses.CreateCharacter.PickFailed + " " + prompt
 	}
 
 	embeds := []*discordgo.MessageEmbed{
@@ -274,16 +350,16 @@ func (c *createCharacterCmd) searchAndProcessImages(ctx context.Context, s Disco
 	}
 
 	var options []discordgo.SelectMenuOption
-	for idx, url := range included {
+	for idx, url := range r.candidates {
 		options = append(options, discordgo.SelectMenuOption{
 			Label:       fmt.Sprintf("Option %d", idx+1),
 			Value:       strconv.Itoa(idx),
-			Description: utils.TruncateString(titles[url], MaxSelectMenuDescriptionLength),
+			Description: utils.TruncateString(r.titles[url], MaxSelectMenuDescriptionLength),
 		})
 	}
 
 	// Save candidates to session to retrieve them in HandleComponent
-	if err := c.session.SaveImageCandidates(ctx, i.GuildID, included); err != nil {
+	if err := c.session.SaveImageCandidates(ctx, i.GuildID, r.candidates); err != nil {
 		logger.FromContext(ctx).Error("failed to save image candidates", "error", err, "guild_id", i.GuildID)
 	}
 
@@ -299,9 +375,9 @@ func (c *createCharacterCmd) searchAndProcessImages(ctx context.Context, s Disco
 	}
 
 	_, errEdit := s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
-		Content:    utils.PtrString(formatCharacterSetMessage(card) + "\n\n" + responses.CreateCharacter.SelectPicture),
+		Content:    utils.PtrString(formatCharacterSetMessage(r.card) + "\n\n" + prompt),
 		Embeds:     &embeds,
-		Files:      []*discordgo.File{{Name: "avatar_options.png", ContentType: "image/png", Reader: bytes.NewReader(rowBytes)}},
+		Files:      []*discordgo.File{{Name: "avatar_options.png", ContentType: "image/png", Reader: bytes.NewReader(r.rowBytes)}},
 		Components: &components,
 	})
 	if errEdit != nil {
@@ -309,6 +385,15 @@ func (c *createCharacterCmd) searchAndProcessImages(ctx context.Context, s Disco
 	}
 
 	return nil
+}
+
+// applyAvatar persists url as the character's avatar on the card and uploads
+// it as the guild avatar.
+func (c *createCharacterCmd) applyAvatar(ctx context.Context, s DiscordSession, guildID, characterID, url string) error {
+	if err := c.session.SetCharacterImage(ctx, guildID, characterID, url); err != nil {
+		return fmt.Errorf("failed to save character image: %w", err)
+	}
+	return ApplyCharacterAvatar(ctx, c.imageClient, s, guildID, characterID, url)
 }
 
 // handleImageSelection processes the user's selection of a profile picture for the character.
@@ -371,62 +456,16 @@ func (c *createCharacterCmd) handleImageSelection(ctx context.Context, s Discord
 		return
 	}
 
-	// Save image URL to the character card
-	if err := c.session.SetCharacterImage(ctx, i.GuildID, details.CharacterID, selectedURL); err != nil {
-		logger.FromContext(ctx).Error("failed to save character image", "error", err, "guild_id", i.GuildID)
+	if err := c.applyAvatar(ctx, s, i.GuildID, details.CharacterID, selectedURL); err != nil {
+		logger.FromContext(ctx).Error("failed to apply selected avatar", "error", err, "guild_id", i.GuildID, "character_id", details.CharacterID)
+		content := responses.SetCharacter.ImageError
+		if errors.Is(err, errGuildAvatarUpdate) {
+			content = responses.SetCharacter.AvatarError
+		}
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
-				Content: responses.SetCharacter.ImageError,
-			},
-		})
-		return
-	}
-
-	// Cache the image and convert to Base64
-	if c.imageClient == nil {
-		logger.FromContext(ctx).Error("no image client available")
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: responses.SetCharacter.ImageError,
-			},
-		})
-		return
-	}
-
-	path, err := c.imageClient.SaveImage(ctx, i.GuildID, details.CharacterID, selectedURL)
-	if err != nil {
-		logger.FromContext(ctx).Error("failed to cache image", "error", err, "guild_id", i.GuildID, "character_id", details.CharacterID)
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: responses.SetCharacter.ImageError,
-			},
-		})
-		return
-	}
-
-	dataURI, err := c.imageClient.ImageToBase64(ctx, path)
-	if err != nil {
-		logger.FromContext(ctx).Error("error converting image to Base64", "error", err)
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: responses.SetCharacter.ImageError,
-			},
-		})
-		return
-	}
-
-	// Update guild-specific avatar
-	err = s.UpdateGuildAvatar(i.GuildID, dataURI)
-	if err != nil {
-		logger.FromContext(ctx).Error("error updating guild avatar", "error", err)
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: responses.SetCharacter.AvatarError,
+				Content: content,
 			},
 		})
 		return

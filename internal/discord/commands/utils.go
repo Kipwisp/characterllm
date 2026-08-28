@@ -27,6 +27,9 @@ const discordNickLimit = 32
 // discordMessageLimit is the maximum length of a message content payload.
 const discordMessageLimit = 2000
 
+// maxAvatarBytes mirrors Discord's 10 MB avatar upload limit.
+const maxAvatarBytes = 10 << 20 // 10 MiB
+
 // Message component custom IDs.
 const (
 	setCharacterImageID = "select_char_image"
@@ -187,8 +190,12 @@ func respondResolveError(ctx context.Context, s DiscordSession, i *discordgo.Int
 	}
 }
 
+// currentChoiceLabel is the display name of the current-character choice;
+// it is what users type to find it in autocomplete.
+const currentChoiceLabel = "Current (active character)"
+
 func currentChoice() *discordgo.ApplicationCommandOptionChoice {
-	return &discordgo.ApplicationCommandOptionChoice{Name: "Current (active character)", Value: currentCardName}
+	return &discordgo.ApplicationCommandOptionChoice{Name: currentChoiceLabel, Value: currentCardName}
 }
 
 // autocompleteCharacters builds Discord autocomplete choices for the guild's
@@ -205,7 +212,7 @@ func autocompleteCharacters(ctx context.Context, sm *session.Manager, guildID, q
 	}
 
 	query = strings.ToLower(query)
-	includeCurrent = includeCurrent && (query == "" || query == currentCardName)
+	includeCurrent = includeCurrent && strings.Contains(strings.ToLower(currentChoiceLabel), query)
 
 	var prefix, partial []*session.CharacterCard
 	for _, card := range cards {
@@ -281,6 +288,9 @@ func truncateToRuneLimit(s string, limit int) string {
 	return string(runes[:limit-3]) + ellipsis
 }
 
+// errGuildAvatarUpdate marks failures at the Discord avatar upload step.
+var errGuildAvatarUpdate = errors.New("failed to update guild avatar")
+
 // SyncGuildIdentity aligns the bot's visible identity in a guild (nickname and
 // avatar) with the active character.
 func SyncGuildIdentity(ctx context.Context, sm *session.Manager, imgClient images.ImageClient, s DiscordSession, guildID string) error {
@@ -315,13 +325,17 @@ func ApplyCharacterAvatar(ctx context.Context, imgClient images.ImageClient, s D
 		}
 	}
 
+	if fi, err := os.Stat(path); err == nil && fi.Size() > maxAvatarBytes {
+		return fmt.Errorf("avatar image exceeds %d bytes", maxAvatarBytes)
+	}
+
 	dataURI, err := imgClient.ImageToBase64(ctx, path)
 	if err != nil {
 		return fmt.Errorf("failed to encode character image: %w", err)
 	}
 
 	if err := s.UpdateGuildAvatar(guildID, dataURI); err != nil {
-		return fmt.Errorf("failed to update guild avatar: %w", err)
+		return fmt.Errorf("%w: %w", errGuildAvatarUpdate, err)
 	}
 	return nil
 }

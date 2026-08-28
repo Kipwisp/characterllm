@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"characterllm/internal/audit"
+	"characterllm/internal/config"
 	"characterllm/internal/images"
 	"characterllm/internal/llm"
 	"characterllm/internal/research"
@@ -22,6 +23,7 @@ type Deps struct {
 	Audit       *audit.AuditLogger
 	ImageClient images.ImageClient
 	Synthesizer research.Synthesizer
+	Config      *config.Config
 	Lock        func(guildID, threadID string) func()
 }
 
@@ -55,7 +57,7 @@ type Registry struct {
 // New builds the command registry; it is the single place listing the bot's commands.
 func New(d Deps) *Registry {
 	setCharacter := &setCharacterCmd{session: d.Session, imageClient: d.ImageClient}
-	createCharacter := &createCharacterCmd{session: d.Session, imageClient: d.ImageClient, synthesizer: d.Synthesizer, audit: d.Audit}
+	createCharacter := &createCharacterCmd{session: d.Session, imageClient: d.ImageClient, synthesizer: d.Synthesizer, audit: d.Audit, config: d.Config}
 	deleteCharacter := &deleteCharacterCmd{session: d.Session, imageClient: d.ImageClient}
 	editCharacter := &editCharacterCmd{session: d.Session, imageClient: d.ImageClient, synthesizer: d.Synthesizer, audit: d.Audit}
 	viewCharacter := &viewCharacterCmd{session: d.Session, imageClient: d.ImageClient}

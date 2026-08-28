@@ -93,7 +93,7 @@ func TestSynthesizer_FetchCharacter(t *testing.T) {
 			MaxRetries: 1,
 			Model:      "test-model",
 		},
-		Images: config.ImageConfig{
+		Search: config.SearchConfig{
 			MaxResults: 5,
 		},
 	}
@@ -112,7 +112,7 @@ func TestSynthesizer_FetchCharacter(t *testing.T) {
 		s := NewSynthesizer(mockSearch, mockLLM, cfg, ps)
 
 		analysis := &AnalysisResult{OfficialName: "Test Char"}
-		res, err := s.FetchCharacter(context.Background(), analysis)
+		res, err := s.FetchCharacter(context.Background(), analysis, nil, 0)
 		if err != nil {
 			t.Fatalf("FetchCharacter failed: %v", err)
 		}
@@ -128,7 +128,7 @@ func TestSynthesizer_FetchCharacter(t *testing.T) {
 		s := NewSynthesizer(mockSearch, nil, cfg, ps)
 
 		analysis := &AnalysisResult{OfficialName: "Unknown Char"}
-		res, err := s.FetchCharacter(context.Background(), analysis)
+		res, err := s.FetchCharacter(context.Background(), analysis, nil, 0)
 		if err != nil {
 			t.Fatalf("FetchCharacter failed: %v", err)
 		}
@@ -162,7 +162,7 @@ func TestSynthesizer_ScenarioBlock(t *testing.T) {
 			return "### Identity & Temperament\nspec", "r", nil
 		}
 		s := NewSynthesizer(mockSearch, mockLLM, cfg, ps)
-		if _, err := s.FetchCharacter(context.Background(), analysis); err != nil {
+		if _, err := s.FetchCharacter(context.Background(), analysis, nil, 0); err != nil {
 			t.Fatalf("FetchCharacter failed: %v", err)
 		}
 		return captured
@@ -367,5 +367,141 @@ func TestStripSectionFormatting(t *testing.T) {
 		if got := stripSectionFormatting(tt.in); got != tt.want {
 			t.Errorf("stripSectionFormatting(%q) = %q; want %q", tt.in, got, tt.want)
 		}
+	}
+}
+
+func TestSynthesizer_AvatarPick(t *testing.T) {
+	cfg := &config.Config{
+		LLM: config.LLMConfig{
+			MaxRetries: 1,
+			Model:      "test-model",
+		},
+	}
+	ps := &prompts.Set{
+		Synthesis: "### Output Structure\n{{MODIFIERS_BLOCK}}\n\n{{SCENARIO_BLOCK}}\n\n{{AVATAR_BLOCK}}\n### Input Data\n{{RESULTS}}",
+	}
+	mockSearch := &mockSearchProvider{
+		Results: []search.SearchResult{{Title: "Wiki", URL: "url", Snippet: "Content"}},
+	}
+	analysis := &AnalysisResult{OfficialName: "Test Char"}
+
+	t.Run("pick_parsed_and_stripped", func(t *testing.T) {
+		var capturedImages []string
+		var capturedPrompt string
+		mockLLM := &mocks.MockLLMClient{
+			GenerateResponseFn: func(ctx context.Context, msgs []llm.Message, model string) (string, string, error) {
+				capturedImages = msgs[0].Images
+				capturedPrompt = msgs[0].Content
+				return "AVATAR: 3\n### Identity & Temperament\nDetailed spec", "r", nil
+			},
+		}
+		s := NewSynthesizer(mockSearch, mockLLM, cfg, ps)
+		res, err := s.FetchCharacter(context.Background(), analysis, []string{"data:image/png;base64,row"}, 3)
+		if err != nil {
+			t.Fatalf("FetchCharacter failed: %v", err)
+		}
+		if res.AvatarChoice != 3 {
+			t.Errorf("expected AvatarChoice 3, got %d", res.AvatarChoice)
+		}
+		if strings.Contains(res.PersonaSpec, "AVATAR") {
+			t.Errorf("avatar line leaked into persona spec: %q", res.PersonaSpec)
+		}
+		if len(capturedImages) != 1 || capturedImages[0] != "data:image/png;base64,row" {
+			t.Errorf("expected the row data URI on the message, got %v", capturedImages)
+		}
+		if !strings.Contains(capturedPrompt, "### Avatar Selection") || !strings.Contains(capturedPrompt, "numbered 1 to 3") {
+			t.Errorf("expected avatar block in prompt, got:\n%s", capturedPrompt)
+		}
+		if !strings.Contains(capturedPrompt, "small Discord profile picture") {
+			t.Errorf("expected the Discord-avatar suitability criterion in the prompt, got:\n%s", capturedPrompt)
+		}
+	})
+
+	t.Run("no_images_no_block", func(t *testing.T) {
+		var capturedImages []string
+		var capturedPrompt string
+		mockLLM := &mocks.MockLLMClient{
+			GenerateResponseFn: func(ctx context.Context, msgs []llm.Message, model string) (string, string, error) {
+				capturedImages = msgs[0].Images
+				capturedPrompt = msgs[0].Content
+				return "### Identity & Temperament\nDetailed spec", "r", nil
+			},
+		}
+		s := NewSynthesizer(mockSearch, mockLLM, cfg, ps)
+		res, err := s.FetchCharacter(context.Background(), analysis, nil, 0)
+		if err != nil {
+			t.Fatalf("FetchCharacter failed: %v", err)
+		}
+		if res.AvatarChoice != 0 {
+			t.Errorf("expected AvatarChoice 0 without images, got %d", res.AvatarChoice)
+		}
+		if len(capturedImages) != 0 {
+			t.Errorf("expected no images on the message, got %v", capturedImages)
+		}
+		if strings.Contains(capturedPrompt, "### Avatar Selection") {
+			t.Errorf("avatar block must not be present without images, got:\n%s", capturedPrompt)
+		}
+	})
+
+	t.Run("out_of_range_is_zero", func(t *testing.T) {
+		mockLLM := &mocks.MockLLMClient{
+			GenerateResponseFn: func(ctx context.Context, msgs []llm.Message, model string) (string, string, error) {
+				return "AVATAR: 99\n### Identity & Temperament\nspec", "r", nil
+			},
+		}
+		s := NewSynthesizer(mockSearch, mockLLM, cfg, ps)
+		res, err := s.FetchCharacter(context.Background(), analysis, []string{"row"}, 2)
+		if err != nil {
+			t.Fatalf("FetchCharacter failed: %v", err)
+		}
+		if res.AvatarChoice != 0 {
+			t.Errorf("expected out-of-range pick to be 0, got %d", res.AvatarChoice)
+		}
+		if strings.Contains(res.PersonaSpec, "AVATAR") {
+			t.Errorf("avatar line leaked into persona spec: %q", res.PersonaSpec)
+		}
+	})
+
+	t.Run("no_line_is_zero", func(t *testing.T) {
+		mockLLM := &mocks.MockLLMClient{
+			GenerateResponseFn: func(ctx context.Context, msgs []llm.Message, model string) (string, string, error) {
+				return "### Identity & Temperament\nspec", "r", nil
+			},
+		}
+		s := NewSynthesizer(mockSearch, mockLLM, cfg, ps)
+		res, err := s.FetchCharacter(context.Background(), analysis, []string{"row"}, 1)
+		if err != nil {
+			t.Fatalf("FetchCharacter failed: %v", err)
+		}
+		if res.AvatarChoice != 0 {
+			t.Errorf("expected AvatarChoice 0 with no AVATAR line, got %d", res.AvatarChoice)
+		}
+	})
+}
+
+func TestRemoveAvatarLine(t *testing.T) {
+	tests := []struct {
+		name   string
+		in     string
+		choice int
+		out    string
+	}{
+		{"clean", "AVATAR: 2\n### Identity & Temperament\nbody", 2, "### Identity & Temperament\nbody"},
+		{"lowercase", "avatar: 1\nspec", 1, "spec"},
+		{"trailing_prose", "AVATAR: 2 (best match)\nspec", 2, "spec"},
+		{"no_digits", "AVATAR: abc\nspec", 0, "spec"},
+		{"absent", "spec", 0, "spec"},
+		{"mid_output", "### Identity & Temperament\nAVATAR: 4\nbody", 4, "### Identity & Temperament\nbody"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, choice := removeAvatarLine(tt.in)
+			if choice != tt.choice {
+				t.Errorf("expected choice %d, got %d", tt.choice, choice)
+			}
+			if out != tt.out {
+				t.Errorf("expected %q, got %q", tt.out, out)
+			}
+		})
 	}
 }

@@ -12,7 +12,7 @@ func TestLoadConfig(t *testing.T) {
 		"DISCORD_TOKEN", "CLIENT_ID", "MAIN_GUILD", "MAIN_CHANNEL",
 		"LLM_URL", "LLM_MODEL", "LLM_MAX_RETRIES", "LLM_MAX_CONTEXT", "LLM_COMPACTION_THRESHOLD", "LLM_RECENT_MEMORY_WINDOW", "LLM_VISION", "LLM_MAX_IMAGES",
 		"SYSTEM_PROMPT_PATH", "COMPACTION_PROMPT_PATH", "SYNTHESIS_PROMPT_PATH", "ANALYZER_PROMPT_PATH", "EDIT_SECTION_PROMPT_PATH",
-		"IMAGE_PROVIDER", "SEARXNG_URL", "MAX_SEARCH_RESULTS", "IMAGE_CACHE_DIR",
+		"SEARCH_PROVIDER", "SEARXNG_URL", "SEARXNG_ENGINES", "MAX_SEARCH_RESULTS", "IMAGE_CACHE_DIR", "LLM_AVATAR_PICK",
 		"LOG_LEVEL", "TOPIC_RATE", "BIRTHDAY_HOUR", "CONVERSATION_LOG",
 	}
 
@@ -49,10 +49,12 @@ func TestLoadConfig(t *testing.T) {
 	os.Setenv("SYNTHESIS_PROMPT_PATH", "test/synth.md")
 	os.Setenv("EDIT_SECTION_PROMPT_PATH", "test/edit.md")
 	os.Setenv("ANALYZER_PROMPT_PATH", "test/anal.md")
-	os.Setenv("IMAGE_PROVIDER", "test-provider")
+	os.Setenv("SEARCH_PROVIDER", "test-provider")
 	os.Setenv("SEARXNG_URL", "http://test-searxng")
+	os.Setenv("SEARXNG_ENGINES", "google,bing")
 	os.Setenv("MAX_SEARCH_RESULTS", "10")
 	os.Setenv("IMAGE_CACHE_DIR", "test/cache")
+	os.Setenv("LLM_AVATAR_PICK", "true")
 	os.Setenv("LOG_LEVEL", "DEBUG")
 	os.Setenv("TOPIC_RATE", "5000")
 	os.Setenv("BIRTHDAY_HOUR", "8")
@@ -111,17 +113,23 @@ func TestLoadConfig(t *testing.T) {
 	if cfg.Prompts.EditSectionPath != "test/edit.md" {
 		t.Errorf("Expected EDIT_SECTION_PROMPT_PATH test/edit.md, got %s", cfg.Prompts.EditSectionPath)
 	}
-	if cfg.Images.Provider != "test-provider" {
-		t.Errorf("Expected IMAGE_PROVIDER test-provider, got %s", cfg.Images.Provider)
+	if cfg.Search.Provider != "test-provider" {
+		t.Errorf("Expected SEARCH_PROVIDER test-provider, got %s", cfg.Search.Provider)
 	}
-	if cfg.Images.SearXNGURL != "http://test-searxng" {
-		t.Errorf("Expected SEARXNG_URL http://test-searxng, got %s", cfg.Images.SearXNGURL)
+	if cfg.Search.SearXNGURL != "http://test-searxng" {
+		t.Errorf("Expected SEARXNG_URL http://test-searxng, got %s", cfg.Search.SearXNGURL)
 	}
-	if cfg.Images.MaxResults != 10 {
-		t.Errorf("Expected MAX_SEARCH_RESULTS 10, got %d", cfg.Images.MaxResults)
+	if cfg.Search.SearXNGEngines != "google,bing" {
+		t.Errorf("Expected SEARXNG_ENGINES google,bing, got %s", cfg.Search.SearXNGEngines)
+	}
+	if cfg.Search.MaxResults != 10 {
+		t.Errorf("Expected MAX_SEARCH_RESULTS 10, got %d", cfg.Search.MaxResults)
 	}
 	if cfg.Images.CacheDir != "test/cache" {
 		t.Errorf("Expected IMAGE_CACHE_DIR test/cache, got %s", cfg.Images.CacheDir)
+	}
+	if !cfg.LLM.AvatarPick {
+		t.Error("Expected LLM_AVATAR_PICK true")
 	}
 	if cfg.General.LogLevel != "DEBUG" {
 		t.Errorf("Expected LOG_LEVEL DEBUG, got %s", cfg.General.LogLevel)
@@ -143,7 +151,7 @@ func TestLoadConfigDefaults(t *testing.T) {
 		"DISCORD_TOKEN", "CLIENT_ID", "MAIN_GUILD", "MAIN_CHANNEL",
 		"LLM_URL", "LLM_MODEL", "LLM_MAX_RETRIES", "LLM_MAX_CONTEXT", "LLM_COMPACTION_THRESHOLD", "LLM_RECENT_MEMORY_WINDOW", "LLM_VISION", "LLM_MAX_IMAGES",
 		"SYSTEM_PROMPT_PATH", "COMPACTION_PROMPT_PATH", "SYNTHESIS_PROMPT_PATH", "ANALYZER_PROMPT_PATH", "EDIT_SECTION_PROMPT_PATH",
-		"IMAGE_PROVIDER", "SEARXNG_URL", "MAX_SEARCH_RESULTS", "IMAGE_CACHE_DIR",
+		"SEARCH_PROVIDER", "SEARXNG_URL", "SEARXNG_ENGINES", "MAX_SEARCH_RESULTS", "IMAGE_CACHE_DIR", "LLM_AVATAR_PICK",
 		"LOG_LEVEL", "TOPIC_RATE", "BIRTHDAY_HOUR", "CONVERSATION_LOG",
 	}
 
@@ -172,8 +180,8 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if cfg.LLM.MaxRetries != 2 {
 		t.Errorf("Expected default LLM_MAX_RETRIES 2, got %d", cfg.LLM.MaxRetries)
 	}
-	if cfg.LLM.MaxContext != 4096 {
-		t.Errorf("Expected default LLM_MAX_CONTEXT 4096, got %d", cfg.LLM.MaxContext)
+	if cfg.LLM.MaxContext != 10000 {
+		t.Errorf("Expected default LLM_MAX_CONTEXT 10000, got %d", cfg.LLM.MaxContext)
 	}
 	if cfg.LLM.CompactionThreshold != 0.9 {
 		t.Errorf("Expected default LLM_COMPACTION_THRESHOLD 0.9, got %f", cfg.LLM.CompactionThreshold)
@@ -190,17 +198,23 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if cfg.Prompts.SystemPath != "prompts/system_prompt.md" {
 		t.Errorf("Expected default SYSTEM_PROMPT_PATH, got %s", cfg.Prompts.SystemPath)
 	}
-	if cfg.Images.Provider != "searxng" {
-		t.Errorf("Expected default IMAGE_PROVIDER searxng, got %s", cfg.Images.Provider)
+	if cfg.Search.Provider != "searxng" {
+		t.Errorf("Expected default SEARCH_PROVIDER searxng, got %s", cfg.Search.Provider)
 	}
-	if cfg.Images.SearXNGURL != "http://localhost:8080" {
-		t.Errorf("Expected default SEARXNG_URL, got %s", cfg.Images.SearXNGURL)
+	if cfg.Search.SearXNGURL != "http://localhost:8080" {
+		t.Errorf("Expected default SEARXNG_URL, got %s", cfg.Search.SearXNGURL)
 	}
-	if cfg.Images.MaxResults != 3 {
-		t.Errorf("Expected default MAX_SEARCH_RESULTS 3, got %d", cfg.Images.MaxResults)
+	if cfg.Search.SearXNGEngines != "" {
+		t.Errorf("Expected default SEARXNG_ENGINES, got %s", cfg.Search.SearXNGEngines)
+	}
+	if cfg.Search.MaxResults != 3 {
+		t.Errorf("Expected default MAX_SEARCH_RESULTS 3, got %d", cfg.Search.MaxResults)
 	}
 	if cfg.Images.CacheDir != "images/cache" {
 		t.Errorf("Expected default IMAGE_CACHE_DIR, got %s", cfg.Images.CacheDir)
+	}
+	if cfg.LLM.AvatarPick {
+		t.Error("Expected default LLM_AVATAR_PICK false")
 	}
 	if cfg.General.LogLevel != "INFO" {
 		t.Errorf("Expected default LOG_LEVEL INFO, got %s", cfg.General.LogLevel)

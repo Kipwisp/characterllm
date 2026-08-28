@@ -14,9 +14,6 @@ import (
 	"github.com/bwmarrin/discordgo"
 )
 
-// maxAvatarBytes mirrors Discord's 10 MB avatar upload limit.
-const maxAvatarBytes = 10 << 20 // 10 MiB
-
 type setAvatarCmd struct {
 	session     *session.Manager
 	imageClient images.ImageClient
@@ -111,20 +108,10 @@ func (c *setAvatarCmd) Execute(ctx context.Context, s DiscordSession, i *discord
 		return err
 	}
 
-	dataURI, err := c.imageClient.ImageToBase64(ctx, path)
-	if err != nil {
-		logger.FromContext(ctx).Error("failed to encode avatar image", "error", err)
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: responses.SetAvatar.AvatarError,
-			},
-		})
-		return err
-	}
-
-	if err := s.UpdateGuildAvatar(i.GuildID, dataURI); err != nil {
-		logger.FromContext(ctx).Error("failed to update guild avatar", "error", err, "guild_id", i.GuildID)
+	// the image is already in the local cache from SaveImage, so
+	// ApplyCharacterAvatar serves it from there and uploads it.
+	if err := ApplyCharacterAvatar(ctx, c.imageClient, s, i.GuildID, details.CharacterID, ""); err != nil {
+		logger.FromContext(ctx).Error("failed to apply avatar", "error", err, "guild_id", i.GuildID)
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{

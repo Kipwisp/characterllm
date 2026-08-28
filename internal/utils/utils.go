@@ -1,10 +1,16 @@
 package utils
 
 import (
+	"encoding/base64"
 	"fmt"
 	"math/rand"
 	"strings"
 )
+
+// PNGDataURI encodes PNG bytes as a data URI for a vision model.
+func PNGDataURI(b []byte) string {
+	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(b)
+}
 
 // slugPrefixLimit bounds the readable portion of a character slug.
 const slugPrefixLimit = 32

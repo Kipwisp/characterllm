@@ -50,7 +50,7 @@ func NewEnv(t *testing.T) *Env {
 			SummaryMaxTokens:    1024,
 			MaxImages:           2,
 		},
-		Images: config.ImageConfig{
+		Search: config.SearchConfig{
 			Provider:   "searxng",
 			SearXNGURL: "http://localhost:8080",
 		},

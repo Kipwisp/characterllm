@@ -267,8 +267,8 @@ func TestAutocompleteCharacters(t *testing.T) {
 	t.Run("Series name matches", func(t *testing.T) {
 		sm.SaveCharacterCard(ctx, guildID, &session.CharacterCard{CharacterID: "c4", DisplayName: "Tank", Series: "Rick and Morty"})
 
-		// Prefix match on the series (non-empty queries suppress the
-		// current suggestion, so Tank is the only choice).
+		// Prefix match on the series (queries not in the current
+		// suggestion's label suppress it, so Tank is the only choice).
 		choices := autocompleteCharacters(ctx, sm, guildID, "rick", true)
 		if len(choices) != 1 || choices[0].Value != "c4" {
 			t.Errorf("expected Tank for 'rick', got %+v", choices)
@@ -290,6 +290,18 @@ func TestAutocompleteCharacters(t *testing.T) {
 		choices = autocompleteCharacters(ctx, sm, guildID, "4", true)
 		if len(choices) != 1 || choices[0].Value != "c4" {
 			t.Errorf("expected Tank for ID substring '4', got %+v", choices)
+		}
+	})
+
+	t.Run("Current suggestion matches its label partially", func(t *testing.T) {
+		// Typing part of "Current (active character)" keeps the suggestion
+		// visible, not just the exact "current" or an empty query.
+		for _, q := range []string{"cur", "act", "e"} {
+			choices := autocompleteCharacters(ctx, sm, guildID, q, true)
+			if len(choices) == 0 || choices[0].Value != currentCardName {
+				t.Errorf("query %q: expected current suggestion first, got %+v", q, choices)
+				continue
+			}
 		}
 	})
 

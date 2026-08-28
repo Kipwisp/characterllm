@@ -23,6 +23,12 @@ func TestSearXNGProvider_Search(t *testing.T) {
 				if r.URL.Query().Get("q") != "test query" {
 					t.Errorf("expected query 'test query', got %s", r.URL.Query().Get("q"))
 				}
+				if r.URL.Query().Get("engines") != "google,duckduckgo" {
+					t.Errorf("expected engines 'google,duckduckgo', got %s", r.URL.Query().Get("engines"))
+				}
+				if r.URL.Query().Get("categories") != "web" {
+					t.Errorf("expected categories 'web', got %s", r.URL.Query().Get("categories"))
+				}
 				w.WriteHeader(http.StatusOK)
 				json.NewEncoder(w).Encode(searxngApiResponse{
 					Results: []SearchResult{
@@ -63,7 +69,7 @@ func TestSearXNGProvider_Search(t *testing.T) {
 			server := httptest.NewServer(tt.serverHandler)
 			defer server.Close()
 
-			provider := NewSearXNGProvider(server.URL)
+			provider := NewSearXNGProvider(server.URL, "google,duckduckgo")
 			results, err := provider.Search(context.Background(), tt.query, tt.limit)
 
 			if (err != nil) != tt.wantErr {
@@ -120,7 +126,7 @@ func TestSearXNGProvider_SearchImages(t *testing.T) {
 			server := httptest.NewServer(tt.serverHandler)
 			defer server.Close()
 
-			provider := NewSearXNGProvider(server.URL)
+			provider := NewSearXNGProvider(server.URL, "")
 			images, err := provider.SearchImages(context.Background(), tt.query, tt.limit)
 
 			if (err != nil) != tt.wantErr {
@@ -135,7 +141,7 @@ func TestSearXNGProvider_SearchImages(t *testing.T) {
 }
 
 func TestSearXNGProvider_NoURL(t *testing.T) {
-	provider := NewSearXNGProvider("")
+	provider := NewSearXNGProvider("", "")
 	_, err := provider.Search(context.Background(), "query", 1)
 	if err == nil {
 		t.Error("expected error when URL is empty")

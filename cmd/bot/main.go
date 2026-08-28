@@ -55,7 +55,7 @@ func main() {
 	// Setup Discord Handlers (Pass config for model name)
 	auditLogger := audit.NewAuditLogger("logs", cfg.General.ConversationLog)
 
-	searchProvider, imageSearchProvider, err := search.NewProvider(cfg.Images.Provider, cfg.Images.SearXNGURL)
+	searchProvider, imageSearchProvider, err := search.NewProvider(cfg.Search.Provider, cfg.Search.SearXNGURL, cfg.Search.SearXNGEngines)
 	if err != nil {
 		slog.Error("failed to initialize search provider", "error", err)
 		os.Exit(1)
@@ -78,6 +78,7 @@ func main() {
 		Audit:       auditLogger,
 		ImageClient: imageClient,
 		Synthesizer: synthesizer,
+		Config:      cfg,
 		Lock:        locks.Lock,
 	})
 

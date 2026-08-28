@@ -22,11 +22,14 @@ type searxngImageApiResponse struct {
 // SearXNGProvider handles requests to a SearXNG instance.
 type SearXNGProvider struct {
 	URL string
+	// Engines is the comma-separated engine filter for web searches; empty
+	// sends no filter and lets the instance use its defaults.
+	Engines string
 }
 
 // NewSearXNGProvider creates a new provider for interacting with a SearXNG instance.
-func NewSearXNGProvider(url string) *SearXNGProvider {
-	return &SearXNGProvider{URL: url}
+func NewSearXNGProvider(url, engines string) *SearXNGProvider {
+	return &SearXNGProvider{URL: url, Engines: engines}
 }
 
 // Search performs a web search using SearXNG and returns a list of search results.
@@ -37,8 +40,11 @@ func (p *SearXNGProvider) Search(ctx context.Context, query string, limit int) (
 
 	params := url.Values{}
 	params.Add("q", query)
+	params.Add("categories", "web")
 	params.Add("format", "json")
-	params.Add("engines", "google,bing,duckduckgo")
+	if p.Engines != "" {
+		params.Add("engines", p.Engines)
+	}
 
 	fullURL := fmt.Sprintf("%s/search?%s", strings.TrimSuffix(p.URL, "/"), params.Encode())
 	req, err := http.NewRequestWithContext(ctx, "GET", fullURL, nil)

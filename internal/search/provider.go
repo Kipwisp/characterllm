@@ -11,13 +11,13 @@ import (
 const ProviderSearXNG = "searxng"
 
 // NewProvider creates a search provider based on the provided name.
-func NewProvider(name string, url string) (SearchProvider, ImageSearchProvider, error) {
+func NewProvider(name, url, engines string) (SearchProvider, ImageSearchProvider, error) {
 	switch strings.ToLower(name) {
 	case ProviderSearXNG:
 		if url == "" {
 			return nil, nil, fmt.Errorf("SearXNG URL is required for provider %s", ProviderSearXNG)
 		}
-		p := NewSearXNGProvider(url)
+		p := NewSearXNGProvider(url, engines)
 		return p, p, nil
 	default:
 		return nil, nil, fmt.Errorf("unsupported search provider: %s", name)

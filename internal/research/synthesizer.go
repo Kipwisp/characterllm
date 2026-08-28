@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"characterllm/internal/config"
@@ -51,6 +52,10 @@ type SynthesisResult struct {
 	Status       SynthesisStatus
 	Ambiguities  []string
 	ResearchData string
+	// AvatarChoice is the 1-based position of the candidate image the model
+	// picked as the character's avatar (0 = no pick). Only set when the
+	// synthesis call was made with candidate images.
+	AvatarChoice int
 }
 
 // CharacterDetails holds the extracted information about a character.
@@ -91,7 +96,13 @@ type SectionRewriteResult struct {
 // Synthesizer defines the interface for analyzing user input and synthesizing character personas.
 type Synthesizer interface {
 	AnalyzeInput(ctx context.Context, input string) (*AnalysisResult, string, string, error)
-	FetchCharacter(ctx context.Context, analysis *AnalysisResult) (*SynthesisResult, error)
+	// FetchCharacter researches and synthesizes the persona. imageURIs are
+	// data URIs of images shown to the model; candidateCount is how many
+	// avatar candidates the model can choose from (the images may tile
+	// several candidates into one picture). The model may pick one via the
+	// AvatarChoice in the result; empty imageURIs means the synthesis runs
+	// without images and no pick.
+	FetchCharacter(ctx context.Context, analysis *AnalysisResult, imageURIs []string, candidateCount int) (*SynthesisResult, error)
 	RewriteSection(ctx context.Context, req SectionRewriteRequest) (*SectionRewriteResult, error)
 }
 
@@ -152,7 +163,7 @@ func (s *SynthesizerClient) AnalyzeInput(ctx context.Context, input string) (*An
 }
 
 // FetchCharacter performs a web search and uses an LLM to synthesize a structured character profile.
-func (s *SynthesizerClient) FetchCharacter(ctx context.Context, analysis *AnalysisResult) (*SynthesisResult, error) {
+func (s *SynthesizerClient) FetchCharacter(ctx context.Context, analysis *AnalysisResult, imageURIs []string, candidateCount int) (*SynthesisResult, error) {
 	logger.FromContext(ctx).Info("beginning character research", "target", analysis.OfficialName)
 
 	// Research: Search for the canonical character
@@ -160,7 +171,7 @@ func (s *SynthesizerClient) FetchCharacter(ctx context.Context, analysis *Analys
 	if analysis.Series != "" {
 		query = fmt.Sprintf("%s (%s) character details biography personality traits", analysis.OfficialName, analysis.Series)
 	}
-	results, err := s.searchProvider.Search(ctx, query, s.config.Images.MaxResults)
+	results, err := s.searchProvider.Search(ctx, query, s.config.Search.MaxResults)
 	if err != nil {
 		return nil, fmt.Errorf("search failed: %w", err)
 	}
@@ -191,8 +202,14 @@ func (s *SynthesizerClient) FetchCharacter(ctx context.Context, analysis *Analys
 	}
 	prompt = strings.Replace(prompt, "{{SCENARIO_BLOCK}}", scenarioBlock, 1)
 
+	avatarBlock := ""
+	if len(imageURIs) > 0 {
+		avatarBlock = fmt.Sprintf(avatarPickBlock, candidateCount, candidateCount)
+	}
+	prompt = strings.Replace(prompt, "{{AVATAR_BLOCK}}", avatarBlock, 1)
+
 	messages := []llm.Message{
-		{Role: "user", Content: prompt},
+		{Role: "user", Content: prompt, Images: imageURIs},
 	}
 
 	for attempt := 1; attempt <= s.config.LLM.MaxRetries; attempt++ {
@@ -203,6 +220,9 @@ func (s *SynthesizerClient) FetchCharacter(ctx context.Context, analysis *Analys
 		}
 
 		res := s.parseSynthesis(profile, analysis.Scenario)
+		if len(imageURIs) == 0 || res.AvatarChoice < 1 || res.AvatarChoice > candidateCount {
+			res.AvatarChoice = 0
+		}
 
 		// If status is OK or explicitly marked as failure (UNKNOWN/AMBIGUOUS), accept it.
 		// If status is UNKNOWN but it didn't start with "STATUS:", it's a formatting error (missing headers).
@@ -223,20 +243,33 @@ func (s *SynthesizerClient) FetchCharacter(ctx context.Context, analysis *Analys
 	return nil, fmt.Errorf("synthesis failed to produce valid output after maximum retries")
 }
 
+// avatarPickBlock is the {{AVATAR_BLOCK}} content for a synthesis call that
+// carries candidate avatar images. The %d placeholders are the candidate count.
+const avatarPickBlock = `### Avatar Selection
+The attached image shows %d candidate photos of this character arranged in a single horizontal row, left to right, numbered 1 to %d.
+- These photos are pulled from the web: they may be fan art, promotional renders, or the wrong person entirely.
+- Compare ALL of the photos and pick the single best one: it must clearly be the character, and of the photos that are, it should be the one that would look best as a small Discord profile picture while still representing the character well: the face clearly visible and roughly centered, decent lighting, a single subject (no group shots), and no heavy text, borders, or watermark clutter.
+- Output ` + "`AVATAR: n`" + ` (where n is the 1-based position of the best photo) on a line by itself before the specification.
+- If no photo reliably matches the character, do not output an AVATAR line and describe the appearance from the research alone.
+`
+
 // parseSynthesis extracts a SynthesisResult from the LLM's formatted response.
 func (s *SynthesizerClient) parseSynthesis(output, scenario string) *SynthesisResult {
+	output, avatarChoice := removeAvatarLine(output)
+
 	if strings.HasPrefix(output, "STATUS: UNKNOWN") {
-		return &SynthesisResult{Status: SynthesisStatusUnknown}
+		return &SynthesisResult{Status: SynthesisStatusUnknown, AvatarChoice: avatarChoice}
 	}
 	if strings.HasPrefix(output, "STATUS: AMBIGUOUS") {
 		msg := strings.TrimPrefix(output, "STATUS: AMBIGUOUS")
 		return &SynthesisResult{
-			Status:      SynthesisStatusAmbiguous,
-			Ambiguities: strings.Split(strings.TrimSpace(msg), "\n"),
+			Status:       SynthesisStatusAmbiguous,
+			Ambiguities:  strings.Split(strings.TrimSpace(msg), "\n"),
+			AvatarChoice: avatarChoice,
 		}
 	}
 
-	res := &SynthesisResult{Status: SynthesisStatusOK}
+	res := &SynthesisResult{Status: SynthesisStatusOK, AvatarChoice: avatarChoice}
 
 	// The persona spec starts after the metadata
 	// We find the first header "### Identity & Temperament"
@@ -256,6 +289,37 @@ func (s *SynthesizerClient) parseSynthesis(output, scenario string) *SynthesisRe
 // persona spec, preserving any sections that follow it.
 func stripScenarioSection(spec string) string {
 	return RemoveSection(spec, SectionScenario)
+}
+
+// removeAvatarLine strips any standalone "AVATAR: n" line from the model
+// output and returns the cleaned output plus the parsed 1-based choice
+// (0 when absent or unparseable). The line is removed wherever it appears
+// so it never leaks into the persona spec.
+func removeAvatarLine(output string) (string, int) {
+	lines := strings.Split(output, "\n")
+	kept := make([]string, 0, len(lines))
+	choice := 0
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(strings.ToUpper(trimmed), "AVATAR:") {
+			if choice == 0 {
+				rest := trimmed[len("AVATAR:"):]
+				if i := strings.IndexFunc(rest, func(r rune) bool { return r >= '0' && r <= '9' }); i != -1 {
+					num := rest[i:]
+					j := 0
+					for j < len(num) && num[j] >= '0' && num[j] <= '9' {
+						j++
+					}
+					if n, err := strconv.Atoi(num[:j]); err == nil {
+						choice = n
+					}
+				}
+			}
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "\n"), choice
 }
 
 // RewriteSection asks the LLM to rewrite one persona section — or, when

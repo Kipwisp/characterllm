@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"encoding/base64"
 	"fmt"
 	"strings"
 	"testing"
@@ -138,5 +139,14 @@ func TestPtrString(t *testing.T) {
 	ptr := PtrString(s)
 	if ptr == nil || *ptr != s {
 		t.Errorf("PtrString(%q) = %v; want %q", s, ptr, s)
+	}
+}
+
+func TestPNGDataURI(t *testing.T) {
+	in := []byte{0x89, 'P', 'N', 'G', '\r', '\n'}
+	got := PNGDataURI(in)
+	want := "data:image/png;base64," + base64.StdEncoding.EncodeToString(in)
+	if got != want {
+		t.Errorf("PNGDataURI = %q; want %q", got, want)
 	}
 }
