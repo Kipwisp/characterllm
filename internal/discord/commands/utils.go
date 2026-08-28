@@ -51,6 +51,10 @@ const currentCardName = "current"
 // thread.
 const currentThreadKey = currentCardName
 
+// emptySectionPlaceholder is shown in a section embed when the spec has no
+// body for that section.
+const emptySectionPlaceholder = "_(empty)_"
+
 // newComponentToken returns a random hex token that makes a message
 // component custom ID unique per interaction.
 func newComponentToken() string {
@@ -474,9 +478,9 @@ func ApplyCharacterAvatar(ctx context.Context, imgClient images.ImageClient, s D
 // messages (one embed slice per message) plus the avatar attachment (local
 // cache first, stored hint URL as fallback). Message 1 carries the identity
 // embed — display name, avatar thumbnail, and official name / series / ID
-// fields — and each "### " spec section gets its own embed; sections that do
-// not fit the per-message embed budget continue in follow-up messages, so
-// the full spec is always shown.
+// fields — and each known spec section gets its own embed, empty sections
+// included; sections that do not fit the per-message embed budget continue
+// in follow-up messages, so the full spec is always shown.
 func buildCharacterCardEmbed(imageClient images.ImageClient, guildID string, card *session.CharacterCard) ([][]*discordgo.MessageEmbed, []*discordgo.File, func()) {
 	embed, files, closeFiles := characterAvatarEmbed(imageClient, guildID, card)
 
@@ -498,10 +502,10 @@ func buildCharacterCardEmbed(imageClient images.ImageClient, guildID string, car
 	// embed is truncated at the description cap.
 	messages := [][]*discordgo.MessageEmbed{{embed}}
 	budget := embedTotalLimit - embedTextLen(embed)
-	for _, sec := range research.SplitSections(card.Description) {
+	for _, sec := range cardSections(card.Description) {
 		// Title plus room for the ellipsis truncateToRuneLimit may append.
 		overhead := len([]rune(sec.Name)) + 3
-		body := sec.Body
+		body := displaySectionBody(sec.Body)
 		// A section rolls into a fresh message whenever its body (at most
 		// the description cap) does not fit the current budget. A body
 		// larger than any single embed is then truncated at the cap.
@@ -527,6 +531,47 @@ func buildCharacterCardEmbed(imageClient images.ImageClient, guildID string, car
 	return messages, files, closeFiles
 }
 
+// cardSections returns the spec's sections in card order: the preamble
+// (when present), every known section — PersonaSectionOrder followed by
+// Scenario — with empty or absent sections included, then any non-canonical
+// sections in the order they appear in the spec.
+func cardSections(spec string) []research.SpecSection {
+	canonical := append(append([]string{}, research.PersonaSectionOrder...), research.SectionScenario)
+	known := make(map[string]bool, len(canonical))
+	for _, name := range canonical {
+		known[name] = true
+	}
+
+	var extras []research.SpecSection
+	var preamble research.SpecSection
+	for _, sec := range research.SplitSections(spec) {
+		switch {
+		case sec.Name == "":
+			preamble = sec
+		case !known[sec.Name]:
+			extras = append(extras, sec)
+		}
+	}
+	var sections []research.SpecSection
+	if preamble.Body != "" {
+		sections = append(sections, preamble)
+	}
+	for _, name := range canonical {
+		body, _ := research.ExtractSection(spec, name)
+		sections = append(sections, research.SpecSection{Name: name, Body: body})
+	}
+	return append(sections, extras...)
+}
+
+// displaySectionBody returns the body a section embed will show, marking
+// sections with no body.
+func displaySectionBody(body string) string {
+	if strings.TrimSpace(body) == "" {
+		return emptySectionPlaceholder
+	}
+	return body
+}
+
 // embedTextLen is how much of an embed's text counts toward the
 // per-message embed total: title, description, and field names and values.
 func embedTextLen(e *discordgo.MessageEmbed) int {
@@ -539,12 +584,11 @@ func embedTextLen(e *discordgo.MessageEmbed) int {
 
 // sectionBodyEmbed renders a spec section body as a single embed titled with
 // the section name; bodies longer than Discord's description limit are
-// truncated. A section with no body still gets its embed so the section name
-// remains visible.
+// truncated. A section with no body shows the empty placeholder.
 func sectionBodyEmbed(section, body string) *discordgo.MessageEmbed {
 	return &discordgo.MessageEmbed{
 		Title:       section,
-		Description: truncateToRuneLimit(body, embedDescriptionMax),
+		Description: truncateToRuneLimit(displaySectionBody(body), embedDescriptionMax),
 		Color:       0x5865F2,
 	}
 }

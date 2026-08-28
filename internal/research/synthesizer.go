@@ -354,7 +354,7 @@ func (s *SynthesizerClient) RewriteSection(ctx context.Context, req SectionRewri
 	// The section reference is fetched from the synthesis prompt.
 	var refSections []string
 	if req.WholePersona {
-		refSections = PersonaSectionOrder
+		refSections = append(append([]string{}, PersonaSectionOrder...), SectionScenario)
 	} else {
 		refSections = []string{req.Section}
 	}

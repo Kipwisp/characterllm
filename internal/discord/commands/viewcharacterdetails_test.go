@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"characterllm/internal/research"
 	"characterllm/internal/session"
 
 	"github.com/bwmarrin/discordgo"
@@ -261,9 +262,12 @@ func TestViewCharacterCmd_EmbedCaps(t *testing.T) {
 	if messageTotal > embedTotalLimit {
 		t.Errorf("message embed text total %d exceeds Discord's %d cap", messageTotal, embedTotalLimit)
 	}
-	// The oversized section is truncated at the description limit.
-	if sectionChars != embedDescriptionMax-3 {
-		t.Errorf("expected section truncated to %d runes, got %d", embedDescriptionMax-3, sectionChars)
+	// The oversized section is truncated at the description limit, and the
+	// empty canonical sections contribute their placeholder each.
+	emptySections := len(research.PersonaSectionOrder) + 1 // + Scenario
+	wantChars := embedDescriptionMax - 3 + emptySections*len([]rune(emptySectionPlaceholder))
+	if sectionChars != wantChars {
+		t.Errorf("expected %d section runes, got %d", wantChars, sectionChars)
 	}
 }
 
@@ -362,8 +366,16 @@ func TestViewCharacterDetailsCmd_EmbedCaps_ShortSpecUntruncated(t *testing.T) {
 		t.Fatalf("Execute failed: %v", err)
 	}
 
-	if len(embeds) != 2 || embeds[1].Description != spec {
-		t.Errorf("short spec should be untruncated in a single section embed, got %+v", embeds)
+	// The card shows the preamble plus every known section, empty ones
+	// included, so expect the preamble embed followed by the canonical set.
+	want := append(append([]string{}, research.PersonaSectionOrder...), research.SectionScenario)
+	if len(embeds) != 2+len(want) || embeds[1].Description != spec {
+		t.Fatalf("short spec should be untruncated with the empty canonical sections, got %+v", embeds)
+	}
+	for i, name := range want {
+		if embeds[2+i].Title != name || embeds[2+i].Description != emptySectionPlaceholder {
+			t.Errorf("expected empty section embed %q at %d, got %q / %q", name, 2+i, embeds[2+i].Title, embeds[2+i].Description)
+		}
 	}
 }
 

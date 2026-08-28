@@ -218,8 +218,8 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if cfg.LLM.AvatarPick {
 		t.Error("Expected default LLM_AVATAR_PICK false")
 	}
-	if cfg.Invite.CommandEnabled {
-		t.Error("Expected default INVITE_COMMAND_ENABLED false")
+	if !cfg.Invite.CommandEnabled {
+		t.Error("Expected default INVITE_COMMAND_ENABLED true")
 	}
 	if cfg.General.LogLevel != "INFO" {
 		t.Errorf("Expected default LOG_LEVEL INFO, got %s", cfg.General.LogLevel)

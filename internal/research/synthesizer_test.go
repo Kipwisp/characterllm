@@ -232,7 +232,7 @@ func TestParseSynthesis_StripsUnrequestedScenario(t *testing.T) {
 
 // Mirrors the real edit-section prompt's request block: the labels are
 // supplied by the injected placeholder values, not the file.
-const editPromptFixture = "### Request\n{{CHARACTER_BLOCK}}\n{{SERIES_BLOCK}}\n{{CONTEXT_BLOCK}}\n{{TARGET_BLOCK}}\n{{INSTRUCTION_BLOCK}}"
+const editPromptFixture = "### Request\n{{CHARACTER_BLOCK}}\n{{SERIES_BLOCK}}\n{{CONTEXT_BLOCK}}\n{{TARGET_BLOCK}}\n{{INSTRUCTION_BLOCK}}\n{{SECTION_REFERENCE}}"
 
 func TestSynthesizer_RewriteSection(t *testing.T) {
 	cfg := &config.Config{
@@ -332,6 +332,12 @@ func TestSynthesizer_RewriteSection(t *testing.T) {
 		}
 		if !strings.Contains(capturedPrompt, "Mode: Whole-Persona") || !strings.Contains(capturedPrompt, "he is always happy") {
 			t.Errorf("whole-persona prompt missing context:\n%s", capturedPrompt)
+		}
+		// The section reference covers every known section, including the
+		// canned Scenario definition.
+		if !strings.Contains(capturedPrompt, "### Section Reference\n### Scenario\n") ||
+			!strings.Contains(capturedPrompt, "temporary context, not a permanent trait") {
+			t.Errorf("whole-persona prompt missing the Scenario reference:\n%s", capturedPrompt)
 		}
 	})
 

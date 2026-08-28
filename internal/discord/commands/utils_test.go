@@ -539,3 +539,33 @@ func TestTruncateToRuneLimit(t *testing.T) {
 		t.Errorf("multibyte truncation = %q", got)
 	}
 }
+
+func TestCardSections(t *testing.T) {
+	spec := "Intro text.\n\n### Appearance\nTall.\n\n### Custom Section\nExtra.\n\n### Greeting\nHi."
+	sections := cardSections(spec)
+
+	// Preamble first, then the full canonical set (empty ones included),
+	// then non-canonical sections in spec order.
+	wantNames := append([]string{""}, append(append([]string{}, research.PersonaSectionOrder...), research.SectionScenario)...)
+	wantNames = append(wantNames, "Custom Section")
+	if len(sections) != len(wantNames) {
+		t.Fatalf("expected %d sections, got %d: %+v", len(wantNames), len(sections), sections)
+	}
+	for i, want := range wantNames {
+		if sections[i].Name != want {
+			t.Errorf("section %d name = %q, want %q", i, sections[i].Name, want)
+		}
+	}
+	bodies := map[string]string{}
+	for _, s := range sections {
+		bodies[s.Name] = s.Body
+	}
+	if bodies[""] != "Intro text." || bodies["Appearance"] != "Tall." || bodies["Greeting"] != "Hi." || bodies["Custom Section"] != "Extra." {
+		t.Errorf("unexpected bodies: %+v", bodies)
+	}
+	for _, name := range []string{research.SectionIdentity, research.SectionVoice, research.SectionDialogue, research.SectionScenario} {
+		if bodies[name] != "" {
+			t.Errorf("section %q should be empty, got %q", name, bodies[name])
+		}
+	}
+}
