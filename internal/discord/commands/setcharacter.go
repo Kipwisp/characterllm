@@ -3,9 +3,11 @@ package commands
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"characterllm/internal/images"
 	"characterllm/internal/logger"
+	"characterllm/internal/research"
 	"characterllm/internal/responses"
 	"characterllm/internal/session"
 
@@ -61,8 +63,21 @@ func (c *setCharacterCmd) Execute(ctx context.Context, s DiscordSession, i *disc
 	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
-			Content: fmt.Sprintf(responses.ListCharacters.SetSuccess, card.DisplayName),
+			Content: c.characterSwitchMessage(ctx, i.GuildID, card),
 		},
 	})
 	return nil
+}
+
+// characterSwitchMessage builds the message shown when a character is
+// activated: the character's last line from its most recent thread, falling
+// back to its greeting, then to the boilerplate confirmation.
+func (c *setCharacterCmd) characterSwitchMessage(ctx context.Context, guildID string, card *session.CharacterCard) string {
+	if last, ok := c.session.GetLastMessageForCharacter(ctx, guildID, card.CharacterID); ok {
+		return last
+	}
+	if greeting, ok := research.ExtractSection(card.Description, research.SectionGreeting); ok && strings.TrimSpace(greeting) != "" {
+		return greeting
+	}
+	return fmt.Sprintf(responses.ListCharacters.SetSuccess, card.DisplayName)
 }

@@ -47,6 +47,17 @@ type createResult struct {
 	titles        map[string]string
 	avatarChoice  int
 	pickAttempted bool
+	greeting      string
+}
+
+// characterSetupMessage is the confirmation message shown once a character is
+// created: the character's own greeting, falling back to the boilerplate
+// "Character set to…" line when the greeting is missing or empty.
+func characterSetupMessage(card *session.CharacterCard, greeting string) string {
+	if strings.TrimSpace(greeting) != "" {
+		return greeting
+	}
+	return fmt.Sprintf(responses.ListCharacters.SetSuccess, card.DisplayName)
 }
 
 // Definition returns the Discord application command definition for researching and creating a character persona card.
@@ -243,6 +254,8 @@ func (c *createCharacterCmd) fetchAndSetupCharacter(ctx context.Context, s Disco
 		logger.FromContext(ctx).Error("could not update bot nickname", "error", err, "guild_id", i.GuildID)
 	}
 
+	greeting, _ := research.ExtractSection(res.PersonaSpec, research.SectionGreeting)
+
 	return &createResult{
 		card:          finalCard,
 		candidates:    candidates,
@@ -250,6 +263,7 @@ func (c *createCharacterCmd) fetchAndSetupCharacter(ctx context.Context, s Disco
 		titles:        titles,
 		avatarChoice:  res.AvatarChoice,
 		pickAttempted: len(imageURIs) > 0,
+		greeting:      greeting,
 	}, nil
 }
 
@@ -305,7 +319,7 @@ func (c *createCharacterCmd) finalizeAvatar(ctx context.Context, s DiscordSessio
 		} else {
 			logger.FromContext(ctx).Info("model-picked avatar applied", "guild_id", i.GuildID, "character_id", r.card.CharacterID, "index", r.avatarChoice)
 			_, errEdit := s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
-				Content: utils.PtrString(formatCharacterSetMessage(r.card)),
+				Content: utils.PtrString(characterSetupMessage(r.card, r.greeting)),
 			})
 			if errEdit != nil {
 				logger.FromContext(ctx).Error("error editing interaction response after avatar pick", "error", errEdit)
@@ -327,7 +341,7 @@ func (r *createResult) isModelPickValid() bool {
 func (c *createCharacterCmd) renderAvatarMenu(ctx context.Context, s DiscordSession, i *discordgo.InteractionCreate, r *createResult, pickFailed bool) error {
 	if len(r.candidates) == 0 {
 		_, errEdit := s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
-			Content: utils.PtrString(formatCharacterSetMessage(r.card)),
+			Content: utils.PtrString(characterSetupMessage(r.card, r.greeting)),
 		})
 		if errEdit != nil {
 			logger.FromContext(ctx).Error("error editing interaction response for empty results", "error", errEdit)
@@ -375,7 +389,7 @@ func (c *createCharacterCmd) renderAvatarMenu(ctx context.Context, s DiscordSess
 	}
 
 	_, errEdit := s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
-		Content:    utils.PtrString(formatCharacterSetMessage(r.card) + "\n\n" + prompt),
+		Content:    utils.PtrString(characterSetupMessage(r.card, r.greeting) + "\n\n" + prompt),
 		Embeds:     &embeds,
 		Files:      []*discordgo.File{{Name: "avatar_options.png", ContentType: "image/png", Reader: bytes.NewReader(r.rowBytes)}},
 		Components: &components,
@@ -489,23 +503,16 @@ func (c *createCharacterCmd) handleImageSelection(ctx context.Context, s Discord
 		return
 	}
 
+	greeting, _ := research.ExtractSection(card.Description, research.SectionGreeting)
 	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseUpdateMessage,
 		Data: &discordgo.InteractionResponseData{
-			Content:     formatCharacterSetMessage(card),
+			Content:     characterSetupMessage(card, greeting),
 			Embeds:      nil,
 			Attachments: &[]*discordgo.MessageAttachment{},
 			Components:  nil,
 		},
 	})
-}
-
-func formatCharacterSetMessage(card *session.CharacterCard) string {
-	message := fmt.Sprintf(responses.ListCharacters.SetSuccess, card.DisplayName)
-	if card.OfficialName != "" {
-		message += fmt.Sprintf(responses.ListCharacters.SetDetail, card.OfficialName)
-	}
-	return message
 }
 
 // mintCharacterID mints a guild-unique character ID from the official name.

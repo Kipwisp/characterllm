@@ -790,6 +790,61 @@ func TestCreateCharacterCmd_VisionDisabledFallsBackToMenu(t *testing.T) {
 	}
 }
 
+func TestCreateCharacterCmd_UsesGreetingAsFirstMessage(t *testing.T) {
+	cmdCtx, s, dbPath := setupCommandTest(t)
+	defer os.Remove(dbPath)
+
+	guildID := "guild1"
+	personaSpec := "### Identity & Temperament\nBody.\n\n### Greeting\nHey, I'm the character."
+
+	mockSynth := &mockSynthesizer{
+		AnalyzeInputFn: func(ctx context.Context, input string) (*research.AnalysisResult, string, string, error) {
+			return &research.AnalysisResult{
+				Status:       research.AnalysisStatusOK,
+				OfficialName: "Official",
+				DisplayName:  "Display Name",
+			}, "reasoning", "raw", nil
+		},
+		FetchCharacterFn: func(ctx context.Context, analysis *research.AnalysisResult, imageURIs []string, candidateCount int) (*research.SynthesisResult, error) {
+			return &research.SynthesisResult{Status: research.SynthesisStatusOK, PersonaSpec: personaSpec}, nil
+		},
+	}
+	cmdCtx.Synthesizer = mockSynth
+	// No image candidates: the flow takes the plain final-message path.
+	cmdCtx.ImageClient = &mockImageClient{
+		SearchImagesFn: func(ctx context.Context, query string, limit int) ([]search.Image, error) {
+			return nil, nil
+		},
+	}
+
+	var capturedContent string
+	s.InteractionResponseEditFn = func(interaction *discordgo.Interaction, edit *discordgo.WebhookEdit) (*discordgo.Message, error) {
+		capturedContent = *edit.Content
+		return nil, nil
+	}
+	s.GuildMemberNicknameFn = func(guildID string, member string, nickname string) error { return nil }
+
+	i := &discordgo.InteractionCreate{
+		Interaction: &discordgo.Interaction{
+			Type: discordgo.InteractionApplicationCommand,
+			Data: discordgo.ApplicationCommandInteractionData{
+				Options: []*discordgo.ApplicationCommandInteractionDataOption{
+					{Name: "description", Value: "Character Name", Type: discordgo.ApplicationCommandOptionString},
+				},
+			},
+		},
+	}
+	i.GuildID = guildID
+
+	cmd := &createCharacterCmd{session: cmdCtx.Session, imageClient: cmdCtx.ImageClient, synthesizer: cmdCtx.Synthesizer, audit: cmdCtx.Audit, config: cmdCtx.Config}
+	if err := cmd.Execute(context.Background(), s, i); err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+	if capturedContent != "Hey, I'm the character." {
+		t.Errorf("expected the greeting as the first message, got %q", capturedContent)
+	}
+}
+
 func TestCreateCharacterCmd_ImageSearchQueryIncludesSeries(t *testing.T) {
 	cmdCtx, s, dbPath := setupCommandTest(t)
 	defer os.Remove(dbPath)

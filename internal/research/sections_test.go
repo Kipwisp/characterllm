@@ -153,6 +153,28 @@ func TestSplitSections(t *testing.T) {
 	}
 }
 
+func TestGreetingSectionRoundTrip(t *testing.T) {
+	spec := "### Identity & Temperament\nBody.\n\n### Greeting\nHey, I'm here.\n\n### Appearance\n- **Species**: Human"
+	body, ok := ExtractSection(spec, SectionGreeting)
+	if !ok || body != "Hey, I'm here." {
+		t.Errorf("greeting = %q (ok=%v)", body, ok)
+	}
+
+	updated, err := ReplaceSection(spec, SectionGreeting, "Back.")
+	if err != nil {
+		t.Fatalf("ReplaceSection (greeting) failed: %v", err)
+	}
+	if body, ok := ExtractSection(updated, SectionGreeting); !ok || body != "Back." {
+		t.Errorf("greeting after replace = %q (ok=%v)", body, ok)
+	}
+	// Neighbors are preserved.
+	for _, section := range []string{SectionIdentity, SectionAppearance} {
+		if _, ok := ExtractSection(updated, section); !ok {
+			t.Errorf("section %s lost after editing the greeting", section)
+		}
+	}
+}
+
 func TestSplitSections_NoHeaders(t *testing.T) {
 	got := SplitSections("Just a blob of text.")
 	if len(got) != 1 || got[0].Name != "" || got[0].Body != "Just a blob of text." {

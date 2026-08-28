@@ -20,6 +20,7 @@ const (
 	SectionVoice      = "Voice & Habits"
 	SectionDialogue   = "Example Dialogue"
 	SectionScenario   = "Scenario"
+	SectionGreeting   = "Greeting"
 )
 
 // sectionBounds returns the start and end offsets of the body of the named

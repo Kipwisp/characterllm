@@ -324,6 +324,82 @@ func TestEditCharacterCmd_SectionRewrite(t *testing.T) {
 	}
 }
 
+func TestEditCharacterCmd_GreetingSection(t *testing.T) {
+	cmdCtx, s, dbPath := setupCommandTest(t)
+	defer os.Remove(dbPath)
+
+	guildID := "guild1"
+	sm := cmdCtx.Session
+	greetingSpec := "### Identity & Temperament\nCold and questioning.\n\n### Greeting\nHey there, friend."
+	sm.SaveCharacterCard(context.Background(), guildID, &session.CharacterCard{
+		CharacterID: "char1",
+		DisplayName: "Miles Morales",
+		Description: greetingSpec,
+	})
+
+	var capturedReq research.SectionRewriteRequest
+	mockSynth := &mockSynthesizer{
+		RewriteSectionFn: func(ctx context.Context, req research.SectionRewriteRequest) (*research.SectionRewriteResult, error) {
+			capturedReq = req
+			return &research.SectionRewriteResult{
+				Body:      "What brings you here?",
+				Prompt:    "prompt",
+				Reasoning: "reasoning",
+			}, nil
+		},
+	}
+
+	var edits []editSnapshot
+	var finalEmbeds []*discordgo.MessageEmbed
+	s.InteractionResponseEditFn = func(interaction *discordgo.Interaction, edit *discordgo.WebhookEdit) (*discordgo.Message, error) {
+		edits = append(edits, snapshotEdit(edit))
+		return nil, nil
+	}
+	s.InteractionRespondFn = func(interaction *discordgo.Interaction, response *discordgo.InteractionResponse) error {
+		if response.Type == discordgo.InteractionResponseUpdateMessage && response.Data != nil {
+			finalEmbeds = response.Data.Embeds
+		}
+		return nil
+	}
+
+	cmd := &editCharacterCmd{session: sm, imageClient: cmdCtx.ImageClient, synthesizer: mockSynth, audit: cmdCtx.Audit}
+	err := cmd.Execute(context.Background(), s, newEditInteraction(guildID, "char1",
+		stringOption("section", "greeting"),
+		stringOption("instruction", "make it more welcoming"),
+	))
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+
+	if len(edits) < 1 {
+		t.Fatalf("Expected a preview edit, got %d", len(edits))
+	}
+	preview := edits[0]
+	if preview.embeds[0].Title != research.SectionGreeting {
+		t.Fatalf("Expected a preview embed titled %q, got %+v", research.SectionGreeting, preview.embeds)
+	}
+	if capturedReq.Section != research.SectionGreeting {
+		t.Errorf("Section = %q, want %q", capturedReq.Section, research.SectionGreeting)
+	}
+	if capturedReq.CurrentBody != "Hey there, friend." {
+		t.Errorf("CurrentBody = %q", capturedReq.CurrentBody)
+	}
+
+	cmd.handleEditAccept(context.Background(), s, newComponentInteraction(guildID, preview.acceptID))
+
+	if len(finalEmbeds) != 1 || finalEmbeds[0].Title != research.SectionGreeting {
+		t.Fatalf("Expected a greeting embed on the final message, got %+v", finalEmbeds)
+	}
+	card, _ := sm.GetCharacterCard(context.Background(), guildID, "char1")
+	body, ok := research.ExtractSection(card.Description, research.SectionGreeting)
+	if !ok || body != "What brings you here?" {
+		t.Errorf("greeting section not rewritten: got %q (ok=%v)", body, ok)
+	}
+	if b, ok := research.ExtractSection(card.Description, research.SectionIdentity); !ok || b != "Cold and questioning." {
+		t.Errorf("identity section must survive the greeting edit, got %q (ok=%v)", b, ok)
+	}
+}
+
 func TestEditCharacterCmd_ScenarioSection(t *testing.T) {
 	cmdCtx, s, dbPath := setupCommandTest(t)
 	defer os.Remove(dbPath)

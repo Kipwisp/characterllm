@@ -247,6 +247,31 @@ func (m *Manager) GetHistory(ctx context.Context, guildID, threadID string, limi
 	return messages, nil
 }
 
+// GetLastMessageForCharacter returns the most recent message in the most
+// recently used thread for a character, and whether any history exists. A
+// query error is treated as no history so callers degrade gracefully.
+func (m *Manager) GetLastMessageForCharacter(ctx context.Context, guildID, characterID string) (string, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var content string
+	err := m.db.QueryRowContext(ctx, `
+		SELECT content FROM chat_history
+		WHERE guild_id = ? AND character_id = ?
+		  AND thread_id = (
+			SELECT thread_id FROM chat_history
+			WHERE guild_id = ? AND character_id = ?
+			ORDER BY created_at DESC, id DESC
+			LIMIT 1
+		  )
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1`, guildID, characterID, guildID, characterID).Scan(&content)
+	if err != nil {
+		return "", false
+	}
+	return content, true
+}
+
 // SaveMessage persists a new message to the chat history for a guild and thread.
 func (m *Manager) SaveMessage(ctx context.Context, guildID, threadID, role, content string) error {
 	m.mu.Lock()

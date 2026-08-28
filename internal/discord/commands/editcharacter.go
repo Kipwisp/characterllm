@@ -42,6 +42,7 @@ const (
 	sectionKeyVoice      = "voice"
 	sectionKeyDialogue   = "dialogue"
 	sectionKeyScenario   = "scenario"
+	sectionKeyGreeting   = "greeting"
 )
 
 // editSectionChoices maps the persona-section option keys to the persona
@@ -52,6 +53,7 @@ var editSectionChoices = map[string]string{
 	sectionKeyVoice:      research.SectionVoice,
 	sectionKeyDialogue:   research.SectionDialogue,
 	sectionKeyScenario:   research.SectionScenario,
+	sectionKeyGreeting:   research.SectionGreeting,
 }
 
 type editCharacterCmd struct {
@@ -127,6 +129,7 @@ func (c *editCharacterCmd) Definition() *discordgo.ApplicationCommand {
 					{Name: "Voice & Habits", Value: sectionKeyVoice},
 					{Name: "Example Dialogue", Value: sectionKeyDialogue},
 					{Name: "Scenario", Value: sectionKeyScenario},
+					{Name: "Greeting", Value: sectionKeyGreeting},
 				},
 			},
 			{

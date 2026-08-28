@@ -43,6 +43,9 @@ Character: [Cold refusal/Dismissal]
 <START>
 ...
 
+### Greeting
+[Write the character's opening message: the very first thing they say when the conversation begins. One short, first-person, in-voice line (1-3 sentences) — a natural greeting that reveals who they are or how they're feeling right now, in the same voice as the Example Dialogue above. No quotation marks, no meta commentary, no AI/assistant tone, and no describing or addressing the user as "user." It should read as the character speaking, not explaining themselves.]
+
 {{MODIFIERS_BLOCK}}
 
 {{SCENARIO_BLOCK}}
@@ -53,7 +56,7 @@ Character: [Cold refusal/Dismissal]
 - **No User Control**: Do not describe the user's thoughts, feelings, or actions. Use "subject inversion" to describe the environment (e.g., instead of "You feel scared," use "The room feels oppressive").
 - **No Lists for Personality**: Personality must be prose; only Appearance is a list.
 - **No Assistant Tone**: The character must never sound helpful or like a service provider unless that is their specific role.
-- **Token Budget**: Keep the permanent fields (Identity, Appearance, Voice, and Scenario when present) between 800 and 1,500 tokens.
+- **Token Budget**: Keep the permanent fields (Identity, Appearance, Voice, Greeting, and Scenario when present) between 800 and 1,500 tokens.
 - **Persona Grounding**: Avoid generic tropes. Describe the *behavior* that proves the trait. Prioritize mundane habits and specific triggers over abstract descriptors.
 
 ### Security Boundary

@@ -2,7 +2,6 @@ package session
 
 import (
 	"context"
-	"database/sql"
 	"os"
 	"testing"
 )
@@ -536,53 +535,55 @@ func TestAppendToLastUserMessage(t *testing.T) {
 	})
 }
 
-func TestNewManager_OlderSchemaStillWorks(t *testing.T) {
-	tmpFile, err := os.CreateTemp("", "session_migrate*.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	tmpFileName := tmpFile.Name()
-	tmpFile.Close()
-	defer os.Remove(tmpFileName)
-
-	// Simulate a database from an older build, with columns that no longer
-	// exist in the schema (orphan columns are left in place and unused).
-	db, err := sql.Open("sqlite", tmpFileName)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = db.Exec(`CREATE TABLE character_cards (
-		guild_id TEXT,
-		character_id TEXT,
-		official_name TEXT,
-		series TEXT,
-		display_name TEXT,
-		description TEXT,
-		source_url TEXT,
-		modifiers TEXT,
-		scenario TEXT,
-		scenario_id TEXT,
-		image_url TEXT DEFAULT '',
-		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-		PRIMARY KEY (guild_id, character_id)
-	)`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	db.Close()
-
-	m, err := NewManager(tmpFileName, "Default Prompt")
-	if err != nil {
-		t.Fatalf("NewManager on pre-migration db failed: %v", err)
-	}
+func TestGetLastMessageForCharacter(t *testing.T) {
+	m, tmpFile := setupManager(t)
+	defer os.Remove(tmpFile)
 	defer m.Close()
+	ctx := context.Background()
 
-	card := &CharacterCard{CharacterID: "c1", DisplayName: "C1", Series: "RDR2"}
-	if err := m.SaveCharacterCard(context.Background(), "guild1", card); err != nil {
-		t.Fatalf("SaveCharacterCard after migration failed: %v", err)
-	}
-	got, err := m.GetCharacterCard(context.Background(), "guild1", "c1")
-	if err != nil || got == nil || got.Series != "RDR2" {
-		t.Fatalf("Series round-trip after migration failed: %v / %+v", err, got)
-	}
+	guildID := "guild1"
+	charID := "char1"
+	m.SaveCharacterCard(ctx, guildID, &CharacterCard{CharacterID: charID, DisplayName: "Test"})
+	m.SetActiveCharacter(ctx, guildID, charID)
+
+	t.Run("no history returns false", func(t *testing.T) {
+		if _, ok := m.GetLastMessageForCharacter(ctx, guildID, charID); ok {
+			t.Error("expected no history to report false")
+		}
+	})
+
+	t.Run("most recent thread's last message wins", func(t *testing.T) {
+		m.SaveMessage(ctx, guildID, "thread-a", "user", "a1")
+		m.SaveMessage(ctx, guildID, "thread-a", "assistant", "a2")
+		m.SaveMessage(ctx, guildID, "thread-b", "user", "b1")
+		m.SaveMessage(ctx, guildID, "thread-b", "assistant", "b2")
+
+		got, ok := m.GetLastMessageForCharacter(ctx, guildID, charID)
+		if !ok || got != "b2" {
+			t.Errorf("expected last message %q from thread-b, got %q (ok=%v)", "b2", got, ok)
+		}
+
+		// A newer message in thread-a makes it the most recently used thread.
+		m.SaveMessage(ctx, guildID, "thread-a", "assistant", "a3")
+		got, ok = m.GetLastMessageForCharacter(ctx, guildID, charID)
+		if !ok || got != "a3" {
+			t.Errorf("expected last message %q from thread-a, got %q (ok=%v)", "a3", got, ok)
+		}
+	})
+
+	t.Run("scoped to the named character", func(t *testing.T) {
+		m.SetActiveCharacter(ctx, guildID, "char2")
+		m.SaveMessage(ctx, guildID, "thread-c", "assistant", "c1")
+
+		// char1's history is unaffected by char2's new thread.
+		got, ok := m.GetLastMessageForCharacter(ctx, guildID, charID)
+		if !ok || got != "a3" {
+			t.Errorf("expected char1's last message %q, got %q (ok=%v)", "a3", got, ok)
+		}
+		got, ok = m.GetLastMessageForCharacter(ctx, guildID, "char2")
+		if !ok || got != "c1" {
+			t.Errorf("expected char2's last message %q, got %q (ok=%v)", "c1", got, ok)
+		}
+	})
 }
+

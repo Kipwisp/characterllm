@@ -144,3 +144,60 @@ func TestSetCharacterCmd_ActivateAmbiguous(t *testing.T) {
 		t.Errorf("Expected candidates annotated with their IDs, got %q", capturedContent)
 	}
 }
+
+func TestSetCharacterCmd_EchoesLastMessage(t *testing.T) {
+	cmdCtx, s, dbPath := setupCommandTest(t)
+	defer os.Remove(dbPath)
+
+	guildID := "guild1"
+	charID := "char1"
+	cmdCtx.Session.SaveCharacterCard(context.Background(), guildID, &session.CharacterCard{
+		CharacterID: charID,
+		DisplayName: "Miles Morales",
+	})
+	// SaveMessage keys on the active character, so set it before seeding.
+	cmdCtx.Session.SetActiveCharacter(context.Background(), guildID, charID)
+	cmdCtx.Session.SaveMessage(context.Background(), guildID, "thread1", "user", "hi")
+	cmdCtx.Session.SaveMessage(context.Background(), guildID, "thread1", "assistant", "Hello, it's me.")
+
+	var capturedContent string
+	s.InteractionRespondFn = func(interaction *discordgo.Interaction, response *discordgo.InteractionResponse) error {
+		capturedContent = response.Data.Content
+		return nil
+	}
+
+	cmd := &setCharacterCmd{session: cmdCtx.Session, imageClient: cmdCtx.ImageClient}
+	if err := cmd.Execute(context.Background(), s, newSetInteraction(guildID, "miles morales")); err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+	if capturedContent != "Hello, it's me.\n" && capturedContent != "Hello, it's me." {
+		t.Errorf("Expected the character's last message echoed, got %q", capturedContent)
+	}
+}
+
+func TestSetCharacterCmd_FallsBackToGreeting(t *testing.T) {
+	cmdCtx, s, dbPath := setupCommandTest(t)
+	defer os.Remove(dbPath)
+
+	guildID := "guild1"
+	charID := "char1"
+	cmdCtx.Session.SaveCharacterCard(context.Background(), guildID, &session.CharacterCard{
+		CharacterID: charID,
+		DisplayName: "Miles Morales",
+		Description: "### Identity & Temperament\nBody.\n\n### Greeting\nHey, it's Miles.",
+	})
+
+	var capturedContent string
+	s.InteractionRespondFn = func(interaction *discordgo.Interaction, response *discordgo.InteractionResponse) error {
+		capturedContent = response.Data.Content
+		return nil
+	}
+
+	cmd := &setCharacterCmd{session: cmdCtx.Session, imageClient: cmdCtx.ImageClient}
+	if err := cmd.Execute(context.Background(), s, newSetInteraction(guildID, "miles morales")); err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+	if capturedContent != "Hey, it's Miles." {
+		t.Errorf("Expected the greeting fallback, got %q", capturedContent)
+	}
+}

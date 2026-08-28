@@ -55,13 +55,11 @@ var (
 		NotFound   string
 		SetError   string
 		SetSuccess string
-		SetDetail  string
 	}{
 		Empty:      "No saved character cards found for this guild. Use /createcharacter to create one!",
 		NotFound:   "The selected character card no longer exists or is unavailable.",
 		SetError:   "An error occurred while setting the character.",
 		SetSuccess: "Character set to **%s**!",
-		SetDetail:  "\nCharacter: %s",
 	}
 
 	CharacterResolution = struct {
