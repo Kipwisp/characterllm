@@ -351,12 +351,25 @@ func (s *SynthesizerClient) RewriteSection(ctx context.Context, req SectionRewri
 
 	instructionBlock := "Instruction: " + req.Instruction
 
+	// The section reference is fetched from the synthesis prompt.
+	var refSections []string
+	if req.WholePersona {
+		refSections = PersonaSectionOrder
+	} else {
+		refSections = []string{req.Section}
+	}
+	sectionReference := sectionDefinitionsFrom(s.prompts.Synthesis, refSections)
+	if sectionReference != "" {
+		sectionReference = "### Section Reference\n" + sectionReference
+	}
+
 	userPrompt := s.prompts.EditSection
 	userPrompt = strings.Replace(userPrompt, "{{CHARACTER_BLOCK}}", characterBlock, 1)
 	userPrompt = strings.Replace(userPrompt, "{{SERIES_BLOCK}}", seriesBlock, 1)
 	userPrompt = strings.Replace(userPrompt, "{{CONTEXT_BLOCK}}", contextBlock, 1)
 	userPrompt = strings.Replace(userPrompt, "{{TARGET_BLOCK}}", targetBlock, 1)
 	userPrompt = strings.Replace(userPrompt, "{{INSTRUCTION_BLOCK}}", instructionBlock, 1)
+	userPrompt = strings.Replace(userPrompt, "{{SECTION_REFERENCE}}", sectionReference, 1)
 	response, reasoning, err := s.llmClient.GenerateResponse(ctx, []llm.Message{
 		{Role: "system", Content: s.prompts.EditSection},
 		{Role: "user", Content: userPrompt},

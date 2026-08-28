@@ -23,6 +23,17 @@ const (
 	SectionGreeting   = "Greeting"
 )
 
+// PersonaSectionOrder lists the always-present persona specification sections
+// in output order.
+var PersonaSectionOrder = []string{SectionIdentity, SectionAppearance, SectionVoice, SectionDialogue, SectionGreeting}
+
+// cannedSectionDefinitions holds the format definition for sections that are
+// emitted only conditionally at synthesis time and so are not part of the
+// synthesis prompt's static Output Structure.
+var cannedSectionDefinitions = map[string]string{
+	SectionScenario: "A short, concrete description of the character's current, temporary circumstances \u2014 the specific situation, place, and moment the conversation is taking place in right now. This is temporary context, not a permanent trait.",
+}
+
 // sectionBounds returns the start and end offsets of the body of the named
 // section: after the "### <section>" header line and before the next
 // "### " header (or the end of the spec).
@@ -153,4 +164,42 @@ func SplitSections(spec string) []SpecSection {
 	}
 	flush()
 	return sections
+}
+
+// sectionDefinitionsFrom resolves the named sections' definitions — from the
+// synthesis prompt when present there, otherwise from cannedSectionDefinitions
+// for conditionally-emitted sections — and joins them with a blank line,
+// reattaching each "### " header and dropping any lone {{PLACEHOLDER}} lines
+// the prompt's conditional blocks leave inside a section's span.
+func sectionDefinitionsFrom(prompt string, sections []string) string {
+	var b strings.Builder
+	for _, s := range sections {
+		body, ok := ExtractSection(prompt, s)
+		if !ok {
+			body = cannedSectionDefinitions[s]
+		}
+		body = strings.TrimSpace(stripPlaceholderLines(body))
+		if body == "" {
+			continue
+		}
+		b.WriteString(SectionHeaderPrefix + s + "\n")
+		b.WriteString(body)
+		b.WriteString("\n\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// stripPlaceholderLines removes lines that consist solely of a
+// {{PLACEHOLDER}} token.
+func stripPlaceholderLines(s string) string {
+	lines := strings.Split(s, "\n")
+	kept := make([]string, 0, len(lines))
+	for _, line := range lines {
+		t := strings.TrimSpace(line)
+		if strings.HasPrefix(t, "{{") && strings.HasSuffix(t, "}}") {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "\n")
 }

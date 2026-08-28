@@ -32,6 +32,7 @@ Following the metadata, you must output the specification exactly in the followi
 - **Establish Boundaries**: Include at least one example where the character refuses a request, reacts coldly, or pushes back against the user to establish the "edges" of their personality.
 - **Avoid "Interview Mode"**: Do NOT use a Q&A format. Create natural, scene-based snippets.
 - **Variety**: Show how they speak in different emotional states (e.g., one calm, one agitated).
+- **Actions**: Surround any physical actions, gestures, or environmental descriptions with asterisks (*sighs and leans back*).
 - **Format**: Do NOT use quotation marks around the dialogue; write the response as raw text (e.g., Character: Hello, not Character: "Hello").
 ]
 <START>
@@ -43,12 +44,12 @@ Character: [Cold refusal/Dismissal]
 <START>
 ...
 
-### Greeting
-[Write the character's opening message: the very first thing they say when the conversation begins. One short, first-person, in-voice line (1-3 sentences) — a natural greeting that reveals who they are or how they're feeling right now, in the same voice as the Example Dialogue above. No quotation marks, no meta commentary, no AI/assistant tone, and no describing or addressing the user as "user." It should read as the character speaking, not explaining themselves.]
-
 {{MODIFIERS_BLOCK}}
 
 {{SCENARIO_BLOCK}}
+
+### Greeting
+[Write the character's opening message: the very first thing they say when the conversation begins. One short, first-person, in-voice line (1-3 sentences) — a natural greeting that reveals who they are or how they're feeling right now, in the same voice as the Example Dialogue above. This is the final section of the specification, placed after the Scenario section when one is present, so let the character's current circumstances shape it. This text is sent verbatim as a chat message, so write it as raw dialogue: no quotation marks around it, no name labels (e.g., `Character: Hello`), and zero emojis. Surround any physical actions, gestures, or environmental descriptions with asterisks (*sighs and leans back*). No meta commentary, no AI/assistant tone, and no describing or addressing the user as "user." It should read as the character speaking, not explaining themselves.]
 
 {{AVATAR_BLOCK}}
 

@@ -49,7 +49,7 @@ func (p *PromptBuilder) buildSystemPrompt(details *session.CharacterDetails, has
 	content := strings.Replace(p.prompts.System, "{{CHARACTER_DETAILS}}", detailsBlock, 1)
 	notice := ""
 	if hasSummary {
-		notice = "\n\n" + summaryPointer
+		notice = "\n\n### Summary\n" + summaryPointer
 	}
 	content = strings.Replace(content, "{{SUMMARY_CONTEXT}}", notice, 1)
 	return llm.Message{Role: "system", Content: content}

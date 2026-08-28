@@ -351,6 +351,75 @@ func TestSynthesizer_RewriteSection(t *testing.T) {
 	})
 }
 
+func TestSynthesizer_RewriteSection_InjectsSectionReference(t *testing.T) {
+	cfg := &config.Config{LLM: config.LLMConfig{MaxRetries: 1, Model: "test-model"}}
+	synthesis := "### Output Structure\n\n### Greeting\n[Write the opening line. No quotation marks, no emojis.]\n\n{{AVATAR_BLOCK}}\n\n### Critical Constraints\n- x\n"
+	ps := &prompts.Set{
+		Synthesis:   synthesis,
+		EditSection: "{{SECTION_REFERENCE}}\n### Request\n{{TARGET_BLOCK}}\n{{INSTRUCTION_BLOCK}}",
+	}
+	var capturedPrompt string
+	mockLLM := &mocks.MockLLMClient{
+		GenerateResponseFn: func(ctx context.Context, msgs []llm.Message, model string) (string, string, error) {
+			capturedPrompt = msgs[1].Content
+			return "Hey, it's me.", "ok", nil
+		},
+	}
+	s := NewSynthesizer(nil, mockLLM, cfg, ps)
+
+	if _, err := s.RewriteSection(context.Background(), SectionRewriteRequest{
+		DisplayName: "Miles",
+		Spec:        "### Greeting\nold",
+		Section:     SectionGreeting,
+		CurrentBody: "old",
+		Instruction: "warm it up",
+	}); err != nil {
+		t.Fatalf("RewriteSection failed: %v", err)
+	}
+	if !strings.Contains(capturedPrompt, "### Greeting\n[Write the opening line. No quotation marks, no emojis.]") {
+		t.Errorf("expected the greeting definition fetched from the synthesis prompt:\n%s", capturedPrompt)
+	}
+	if strings.Contains(capturedPrompt, "{{AVATAR_BLOCK}}") {
+		t.Errorf("placeholder must be stripped from the fetched definition:\n%s", capturedPrompt)
+	}
+}
+
+func TestSynthesizer_RewriteSection_ScenarioReferenceIsCanned(t *testing.T) {
+	cfg := &config.Config{LLM: config.LLMConfig{MaxRetries: 1, Model: "test-model"}}
+	// The synthesis template has no literal "### Scenario" section (it is a
+	// conditional block), so the Scenario reference must come from the canned
+	// definition.
+	synthesis := "### Output Structure\n\n### Greeting\n[opening line]\n\n### Critical Constraints\n- x\n"
+	ps := &prompts.Set{
+		Synthesis:   synthesis,
+		EditSection: "{{SECTION_REFERENCE}}\n### Request\n{{TARGET_BLOCK}}\n{{INSTRUCTION_BLOCK}}",
+	}
+	var capturedPrompt string
+	mockLLM := &mocks.MockLLMClient{
+		GenerateResponseFn: func(ctx context.Context, msgs []llm.Message, model string) (string, string, error) {
+			capturedPrompt = msgs[1].Content
+			return "Stuck in a rainy city.", "ok", nil
+		},
+	}
+	s := NewSynthesizer(nil, mockLLM, cfg, ps)
+
+	if _, err := s.RewriteSection(context.Background(), SectionRewriteRequest{
+		DisplayName: "Miles",
+		Spec:        "### Scenario\nA rainy city.",
+		Section:     SectionScenario,
+		CurrentBody: "A rainy city.",
+		Instruction: "make it sadder",
+	}); err != nil {
+		t.Fatalf("RewriteSection failed: %v", err)
+	}
+	if !strings.Contains(capturedPrompt, "### Section Reference\n### Scenario\n") {
+		t.Errorf("expected the canned Scenario reference under its header:\n%s", capturedPrompt)
+	}
+	if !strings.Contains(capturedPrompt, "temporary context, not a permanent trait") {
+		t.Errorf("expected the canned Scenario definition text:\n%s", capturedPrompt)
+	}
+}
+
 func TestStripSectionFormatting(t *testing.T) {
 	tests := []struct {
 		in   string
