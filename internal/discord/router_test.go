@@ -2,7 +2,6 @@ package discord
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -37,9 +36,12 @@ func TestInteractionCreate_DispatchesSlashCommand(t *testing.T) {
 	r, s, _, dbPath := setupRouter(t, llm)
 	defer os.Remove(dbPath)
 
-	var content string
+	var capturedEmbed *discordgo.MessageEmbed
 	s.InteractionRespondFn = func(interaction *discordgo.Interaction, response *discordgo.InteractionResponse) error {
-		content = response.Data.Content
+		if len(response.Data.Embeds) != 1 {
+			t.Fatalf("expected 1 embed, got %d", len(response.Data.Embeds))
+		}
+		capturedEmbed = response.Data.Embeds[0]
 		return nil
 	}
 
@@ -53,8 +55,12 @@ func TestInteractionCreate_DispatchesSlashCommand(t *testing.T) {
 
 	r.handleInteraction(s, i)
 
-	if content != fmt.Sprintf(responses.Status.Online, 42*time.Millisecond) {
-		t.Errorf("unexpected response: %q", content)
+	if capturedEmbed == nil || capturedEmbed.Title != responses.Status.Title {
+		t.Errorf("unexpected response: %+v", capturedEmbed)
+	}
+	if len(capturedEmbed.Fields) != 2 || capturedEmbed.Fields[0].Value != responses.Status.Online ||
+		capturedEmbed.Fields[1].Value != (42*time.Millisecond).String() {
+		t.Errorf("unexpected embed fields: %+v", capturedEmbed.Fields)
 	}
 }
 

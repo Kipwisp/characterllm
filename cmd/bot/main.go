@@ -34,6 +34,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	if cfg.Discord.ClientID == "" {
+		slog.Error("Discord client ID is missing! Set it in .env or via CLIENT_ID environment variable")
+		os.Exit(1)
+	}
+
 	// Load prompt templates; fail fast if any file is missing or unreadable
 	promptSet, err := prompts.Load(cfg.Prompts.SystemPath, cfg.Prompts.CompactionPath, cfg.Prompts.SynthesisPath, cfg.Prompts.AnalyzerPath, cfg.Prompts.EditSectionPath)
 	if err != nil {

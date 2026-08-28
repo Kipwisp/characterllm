@@ -15,6 +15,7 @@ type Config struct {
 	Prompts PromptConfig
 	Search  SearchConfig
 	Images  ImageConfig
+	Invite  InviteConfig
 	General GeneralConfig
 }
 
@@ -66,10 +67,14 @@ type ImageConfig struct {
 	CacheDir string
 }
 
+type InviteConfig struct {
+	// CommandEnabled registers the /invite slash command.
+	CommandEnabled bool
+}
+
 type GeneralConfig struct {
-	LogLevel     string
-	TopicRate    string
-	BirthdayHour string
+	LogLevel  string
+	TopicRate string
 	// ConversationLog toggles the per-guild conversation audit files.
 	ConversationLog bool
 }
@@ -114,10 +119,12 @@ func LoadConfig() *Config {
 		Images: ImageConfig{
 			CacheDir: getEnv("IMAGE_CACHE_DIR", "images/cache"),
 		},
+		Invite: InviteConfig{
+			CommandEnabled: getEnvBool("INVITE_COMMAND_ENABLED", true),
+		},
 		General: GeneralConfig{
 			LogLevel:        getEnv("LOG_LEVEL", "INFO"),
 			TopicRate:       getEnv("TOPIC_RATE", "10000"),
-			BirthdayHour:    getEnv("BIRTHDAY_HOUR", "12"),
 			ConversationLog: getEnvBool("CONVERSATION_LOG", true),
 		},
 	}

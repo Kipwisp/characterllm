@@ -13,7 +13,8 @@ func TestLoadConfig(t *testing.T) {
 		"LLM_URL", "LLM_MODEL", "LLM_MAX_RETRIES", "LLM_MAX_CONTEXT", "LLM_COMPACTION_THRESHOLD", "LLM_RECENT_MEMORY_WINDOW", "LLM_VISION", "LLM_MAX_IMAGES",
 		"SYSTEM_PROMPT_PATH", "COMPACTION_PROMPT_PATH", "SYNTHESIS_PROMPT_PATH", "ANALYZER_PROMPT_PATH", "EDIT_SECTION_PROMPT_PATH",
 		"SEARCH_PROVIDER", "SEARXNG_URL", "SEARXNG_ENGINES", "MAX_SEARCH_RESULTS", "IMAGE_CACHE_DIR", "LLM_AVATAR_PICK",
-		"LOG_LEVEL", "TOPIC_RATE", "BIRTHDAY_HOUR", "CONVERSATION_LOG",
+		"INVITE_COMMAND_ENABLED",
+		"LOG_LEVEL", "TOPIC_RATE", "CONVERSATION_LOG",
 	}
 
 	for _, v := range envVars {
@@ -57,7 +58,7 @@ func TestLoadConfig(t *testing.T) {
 	os.Setenv("LLM_AVATAR_PICK", "true")
 	os.Setenv("LOG_LEVEL", "DEBUG")
 	os.Setenv("TOPIC_RATE", "5000")
-	os.Setenv("BIRTHDAY_HOUR", "8")
+	os.Setenv("INVITE_COMMAND_ENABLED", "true")
 	os.Setenv("CONVERSATION_LOG", "false")
 
 	cfg := LoadConfig()
@@ -131,14 +132,14 @@ func TestLoadConfig(t *testing.T) {
 	if !cfg.LLM.AvatarPick {
 		t.Error("Expected LLM_AVATAR_PICK true")
 	}
+	if !cfg.Invite.CommandEnabled {
+		t.Error("Expected INVITE_COMMAND_ENABLED true")
+	}
 	if cfg.General.LogLevel != "DEBUG" {
 		t.Errorf("Expected LOG_LEVEL DEBUG, got %s", cfg.General.LogLevel)
 	}
 	if cfg.General.TopicRate != "5000" {
 		t.Errorf("Expected TOPIC_RATE 5000, got %s", cfg.General.TopicRate)
-	}
-	if cfg.General.BirthdayHour != "8" {
-		t.Errorf("Expected BIRTHDAY_HOUR 8, got %s", cfg.General.BirthdayHour)
 	}
 	if cfg.General.ConversationLog {
 		t.Error("Expected CONVERSATION_LOG false")
@@ -152,7 +153,8 @@ func TestLoadConfigDefaults(t *testing.T) {
 		"LLM_URL", "LLM_MODEL", "LLM_MAX_RETRIES", "LLM_MAX_CONTEXT", "LLM_COMPACTION_THRESHOLD", "LLM_RECENT_MEMORY_WINDOW", "LLM_VISION", "LLM_MAX_IMAGES",
 		"SYSTEM_PROMPT_PATH", "COMPACTION_PROMPT_PATH", "SYNTHESIS_PROMPT_PATH", "ANALYZER_PROMPT_PATH", "EDIT_SECTION_PROMPT_PATH",
 		"SEARCH_PROVIDER", "SEARXNG_URL", "SEARXNG_ENGINES", "MAX_SEARCH_RESULTS", "IMAGE_CACHE_DIR", "LLM_AVATAR_PICK",
-		"LOG_LEVEL", "TOPIC_RATE", "BIRTHDAY_HOUR", "CONVERSATION_LOG",
+		"INVITE_COMMAND_ENABLED",
+		"LOG_LEVEL", "TOPIC_RATE", "CONVERSATION_LOG",
 	}
 
 	originalEnv := make(map[string]string)
@@ -215,6 +217,9 @@ func TestLoadConfigDefaults(t *testing.T) {
 	}
 	if cfg.LLM.AvatarPick {
 		t.Error("Expected default LLM_AVATAR_PICK false")
+	}
+	if cfg.Invite.CommandEnabled {
+		t.Error("Expected default INVITE_COMMAND_ENABLED false")
 	}
 	if cfg.General.LogLevel != "INFO" {
 		t.Errorf("Expected default LOG_LEVEL INFO, got %s", cfg.General.LogLevel)

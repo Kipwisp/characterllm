@@ -21,6 +21,10 @@ func NewBot(token string, router *Router) (*Bot, error) {
 		return nil, err
 	}
 
+	// Request the privileged message content intent so chat handlers receive
+	// message text and attachments.
+	dg.Identify.Intents = discordgo.IntentsAllWithoutPrivileged | discordgo.IntentMessageContent
+
 	return &Bot{
 		Session: dg,
 		Router:  router,

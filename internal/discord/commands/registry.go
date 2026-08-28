@@ -77,6 +77,10 @@ func New(d Deps) *Registry {
 			{prefix: editRejectPrefix, handle: editCharacter.handleEditReject},
 		},
 	}
+	var cmds []slashCommand
+	if d.Config != nil && d.Config.Invite.CommandEnabled {
+		cmds = append(cmds, &inviteCmd{clientID: d.Config.Discord.ClientID})
+	}
 	for _, cmd := range []slashCommand{
 		&clearThreadCmd{session: d.Session, lock: d.Lock},
 		&newThreadCmd{session: d.Session, lock: d.Lock},
@@ -90,6 +94,9 @@ func New(d Deps) *Registry {
 		editCharacter,
 		&setAvatarCmd{session: d.Session, imageClient: d.ImageClient},
 	} {
+		cmds = append(cmds, cmd)
+	}
+	for _, cmd := range cmds {
 		def := cmd.Definition()
 		registry.byName[def.Name] = cmd
 		registry.defs = append(registry.defs, def)

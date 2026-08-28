@@ -2,7 +2,6 @@ package commands
 
 import (
 	"context"
-	"fmt"
 
 	"characterllm/internal/llm"
 	"characterllm/internal/responses"
@@ -22,24 +21,31 @@ func (c *statusCmd) Definition() *discordgo.ApplicationCommand {
 	}
 }
 
-// Execute pings the LLM server and returns the latency to the user.
+// Execute pings the LLM server and reports the status.
 func (c *statusCmd) Execute(ctx context.Context, s DiscordSession, i *discordgo.InteractionCreate) error {
+	embed := &discordgo.MessageEmbed{
+		Title: responses.Status.Title,
+		Color: 0x57F287,
+	}
 	latency, err := c.llm.Ping(ctx)
 	if err != nil {
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: fmt.Sprintf(responses.Status.Offline, err),
-			},
-		})
-		return err
+		embed.Color = 0xED4245
+		embed.Fields = []*discordgo.MessageEmbedField{
+			{Name: responses.Status.State, Value: responses.Status.Offline, Inline: true},
+			{Name: responses.Status.Error, Value: err.Error()},
+		}
+	} else {
+		embed.Fields = []*discordgo.MessageEmbedField{
+			{Name: responses.Status.State, Value: responses.Status.Online, Inline: true},
+			{Name: responses.Status.Latency, Value: latency.String(), Inline: true},
+		}
 	}
 
 	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
-			Content: fmt.Sprintf(responses.Status.Online, latency),
+			Embeds: []*discordgo.MessageEmbed{embed},
 		},
 	})
-	return nil
+	return err
 }

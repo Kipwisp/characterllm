@@ -3,11 +3,19 @@ package responses
 // Grouped response messages associated with specific commands and general bot behavior.
 var (
 	Status = struct {
+		Title   string
+		State   string
 		Online  string
 		Offline string
+		Latency string
+		Error   string
 	}{
-		Online:  "✅ LLM Server is online! Latency: %v",
-		Offline: "❌ LLM Server is unreachable: %v",
+		Title:   "LLM Server Status",
+		State:   "State",
+		Online:  "✅ Online",
+		Offline: "❌ Offline",
+		Latency: "Latency",
+		Error:   "Error",
 	}
 
 	CreateCharacter = struct {
@@ -118,6 +126,12 @@ var (
 		DownloadError: "Failed to download the image.",
 		TooLarge:      "That image is too large to use as a Discord avatar.",
 		AvatarError:   "The image was saved, but Discord rejected the avatar update.",
+	}
+
+	Invite = struct {
+		Link string
+	}{
+		Link: "You can add me to your server with this link: %s",
 	}
 
 	ClearThread = struct {

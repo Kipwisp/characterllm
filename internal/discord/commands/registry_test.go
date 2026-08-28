@@ -3,9 +3,12 @@ package commands
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"testing"
 
+	"characterllm/internal/config"
+	"characterllm/internal/responses"
 	"characterllm/internal/session"
 
 	"github.com/bwmarrin/discordgo"
@@ -33,6 +36,57 @@ func TestRegistry_Definitions(t *testing.T) {
 		if !names[want] {
 			t.Errorf("missing command definition %q", want)
 		}
+	}
+}
+
+func TestRegistry_InviteCommandGatedByConfig(t *testing.T) {
+	// Disabled by default: no Config at all.
+	if r := New(Deps{}); len(r.Definitions()) != 11 {
+		t.Fatalf("expected 11 definitions without config, got %d", len(r.Definitions()))
+	}
+
+	// Enabled via config.
+	cfg := &config.Config{
+		Discord: config.DiscordConfig{ClientID: "test-client"},
+		Invite:  config.InviteConfig{CommandEnabled: true},
+	}
+	r := New(Deps{Config: cfg})
+	if len(r.Definitions()) != 12 {
+		t.Fatalf("expected 12 definitions with invite enabled, got %d", len(r.Definitions()))
+	}
+	if _, ok := r.byName["invite"]; !ok {
+		t.Fatal("expected invite command to be registered")
+	}
+
+	// Explicitly disabled.
+	off := &config.Config{}
+	if r := New(Deps{Config: off}); len(r.Definitions()) != 11 {
+		t.Fatalf("expected 11 definitions with invite disabled, got %d", len(r.Definitions()))
+	}
+}
+
+func TestRegistry_InviteCommand_Execute(t *testing.T) {
+	var capturedContent string
+	s := &mockDiscordSession{}
+	s.InteractionRespondFn = func(interaction *discordgo.Interaction, response *discordgo.InteractionResponse) error {
+		capturedContent = response.Data.Content
+		return nil
+	}
+
+	r := New(Deps{Config: &config.Config{
+		Discord: config.DiscordConfig{ClientID: "test-client"},
+		Invite:  config.InviteConfig{CommandEnabled: true},
+	}})
+	err := r.Execute(context.Background(), "invite", s, &discordgo.InteractionCreate{
+		Interaction: &discordgo.Interaction{},
+	})
+	if err != nil {
+		t.Fatalf("Execute(invite) returned error: %v", err)
+	}
+	expected := fmt.Sprintf(responses.Invite.Link,
+		"https://discord.com/oauth2/authorize?client_id=test-client&permissions=274945133568&integration_type=0&scope=bot")
+	if capturedContent != expected {
+		t.Errorf("Expected %q, got %q", expected, capturedContent)
 	}
 }
 
