@@ -1,12 +1,15 @@
 package commands
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"characterllm/internal/audit"
 	"characterllm/internal/research"
 	"characterllm/internal/responses"
 	"characterllm/internal/search"
@@ -597,10 +600,15 @@ func runCreateCharacterWithModelPick(t *testing.T, cmdCtx *testDeps, s *mockDisc
 		FetchCharacterFn: func(ctx context.Context, analysis *research.AnalysisResult, imageURIs []string, candidateCount int) (*research.SynthesisResult, error) {
 			gotImages = imageURIs
 			gotCount = candidateCount
+			raw := "Persona"
+			if avatarChoice > 0 {
+				raw = fmt.Sprintf("AVATAR: %d\n%s", avatarChoice, "Persona")
+			}
 			return &research.SynthesisResult{
 				Status:       research.SynthesisStatusOK,
 				PersonaSpec:  "Persona",
 				AvatarChoice: avatarChoice,
+				RawResponse:  raw,
 			}, nil
 		},
 	}
@@ -649,6 +657,9 @@ func TestCreateCharacterCmd_ModelPickApplied(t *testing.T) {
 	cmdCtx, s, dbPath := setupCommandTest(t)
 	defer os.Remove(dbPath)
 
+	auditDir := t.TempDir()
+	cmdCtx.Audit = audit.NewAuditLogger(auditDir, true)
+
 	var capturedAvatar string
 	s.UpdateGuildAvatarFn = func(guildID, dataURI string) error {
 		capturedAvatar = dataURI
@@ -683,6 +694,29 @@ func TestCreateCharacterCmd_ModelPickApplied(t *testing.T) {
 	if details.ImageURL != "http://b" {
 		t.Errorf("expected image_url to be the picked candidate, got %q", details.ImageURL)
 	}
+
+	if !auditDirContains(t, auditDir, "AVATAR: 2") {
+		t.Error("expected the synthesis audit entry to log the model's AVATAR line")
+	}
+}
+
+// auditDirContains reports whether any audit file in dir contains s.
+func auditDirContains(t *testing.T, dir, s string) bool {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range entries {
+		data, err := os.ReadFile(filepath.Join(dir, f.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(data, []byte(s)) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestCreateCharacterCmd_ModelPickNoChoiceFallsBackToMenu(t *testing.T) {

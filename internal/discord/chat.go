@@ -3,6 +3,7 @@ package discord
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"regexp"
 	"strings"
 	"time"
@@ -31,6 +32,9 @@ type Chat struct {
 	PromptBuilder *conversation.PromptBuilder
 	Compactor     *conversation.Compactor
 	Locks         *ConversationLocks
+	// Roll returns a uniform float in [0,1) for the ambient reply
+	// probability gate; nil defaults to math/rand.
+	Roll func() float64
 }
 
 // Handle processes one incoming message into a complete conversation turn.
@@ -44,17 +48,67 @@ func (c *Chat) Handle(s commands.DiscordSession, m *discordgo.MessageCreate) {
 	ctx := logger.ToContext(context.Background(), logger.WithRequestID(reqID, "guild_id", m.GuildID))
 
 	prompt, ok := c.getPrompt(ctx, s, m)
-	if !ok {
-		return
-	}
-
-	// Images are ephemeral: they ride along in this turn's prompt only and are never persisted to history.
+	kind := audit.KindChat
 	var imageDataURIs []string
-	if c.Config.LLM.Vision {
-		imageDataURIs = c.collectImageAttachments(ctx, m)
+	if ok {
+		// Images are ephemeral: they ride along in this turn's prompt only and are never persisted to history.
+		if c.Config.LLM.Vision {
+			imageDataURIs = c.collectImageAttachments(ctx, m)
+		}
+	} else {
+		prompt, imageDataURIs, ok = c.ambientReplyPrompt(ctx, s, m)
+		if !ok {
+			return
+		}
+		kind = audit.KindAmbientReply
 	}
 
-	c.runTurn(ctx, s, m.GuildID, m.ChannelID, prompt, imageDataURIs, &discordgo.MessageReference{MessageID: m.ID}, audit.KindChat, reqID)
+	c.runTurn(ctx, s, m.GuildID, m.ChannelID, prompt, imageDataURIs, &discordgo.MessageReference{MessageID: m.ID}, kind, reqID)
+}
+
+// ambientReplyPrompt applies the ambient reply chance: in the guild's
+// ambient channel, any user message that does not address the bot gives the
+// bot a probability-gated chance to join in.
+func (c *Chat) ambientReplyPrompt(ctx context.Context, s commands.DiscordSession, m *discordgo.MessageCreate) (string, []string, bool) {
+	if !c.Config.Ambient.Enabled {
+		return "", nil, false
+	}
+	if strings.Contains(m.Content, s.GetUserMention()) {
+		return "", nil, false
+	}
+	channelID, err := c.Session.GetAmbientChannel(ctx, m.GuildID)
+	if err != nil {
+		logger.FromContext(ctx).Error("failed to read ambient channel", "error", err)
+		return "", nil, false
+	}
+	if channelID != m.ChannelID {
+		return "", nil, false
+	}
+	if c.roll() >= c.Config.Ambient.ReplyProbability {
+		logger.FromContext(ctx).Debug("ambient reply skipped by probability gate", "guild_id", m.GuildID)
+		return "", nil, false
+	}
+	cue, imageDataURIs, err := buildTranscriptCue(ctx, s, c.Config, c.ImageClient, m.ChannelID)
+	if err != nil {
+		logger.FromContext(ctx).Warn("ambient reply transcript fetch failed", "error", err)
+		return "", nil, false
+	}
+	if cue == "" {
+		logger.FromContext(ctx).Debug("ambient reply skipped: empty transcript", "guild_id", m.GuildID)
+		return "", nil, false
+	}
+
+	logger.FromContext(ctx).Debug("sending ambient reply", "guild_id", m.GuildID)
+	return cue, imageDataURIs, true
+}
+
+// roll returns the gate's probability roll, defaulting to math/rand when no
+// source is injected.
+func (c *Chat) roll() float64 {
+	if c.Roll != nil {
+		return c.Roll()
+	}
+	return rand.Float64()
 }
 
 // runTurn executes one full conversation turn: resolve the active character

@@ -83,6 +83,9 @@ type AmbientConfig struct {
 	ReplyCount int
 	// TickProbability is the per-tick chance an ambient turn actually runs.
 	TickProbability float64
+	// ReplyProbability is the chance the bot joins a user's threaded reply
+	// in the ambient channel.
+	ReplyProbability float64
 }
 
 type GeneralConfig struct {
@@ -146,19 +149,22 @@ func LoadConfig() *Config {
 
 func loadAmbientConfig() AmbientConfig {
 	c := AmbientConfig{
-		Enabled:         getEnvBool("AMBIENT_ENABLED", true),
-		MinSeconds:      getEnvInt("AMBIENT_MIN_SECONDS", 120),
-		MaxSeconds:      getEnvInt("AMBIENT_MAX_SECONDS", 600),
-		ReplyCount:      getEnvInt("AMBIENT_REPLY_COUNT", 5),
-		TickProbability: getEnvFloat("AMBIENT_TICK_PROBABILITY", 0.5),
+		Enabled:          getEnvBool("AMBIENT_ENABLED", true),
+		MinSeconds:       getEnvInt("AMBIENT_MIN_SECONDS", 14400),
+		MaxSeconds:       getEnvInt("AMBIENT_MAX_SECONDS", 21600),
+		ReplyCount:       getEnvInt("AMBIENT_REPLY_COUNT", 5),
+		TickProbability:  getEnvFloat("AMBIENT_TICK_PROBABILITY", 0.5),
+		ReplyProbability: getEnvFloat("AMBIENT_REPLY_PROBABILITY", 0.1),
 	}
 	if c.MaxSeconds < c.MinSeconds {
 		c.MaxSeconds = c.MinSeconds
 	}
-	if c.TickProbability < 0 {
-		c.TickProbability = 0
-	} else if c.TickProbability > 1 {
-		c.TickProbability = 1
+	for _, p := range []*float64{&c.TickProbability, &c.ReplyProbability} {
+		if *p < 0 {
+			*p = 0
+		} else if *p > 1 {
+			*p = 1
+		}
 	}
 	return c
 }

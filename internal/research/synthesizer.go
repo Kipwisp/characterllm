@@ -56,6 +56,8 @@ type SynthesisResult struct {
 	// picked as the character's avatar (0 = no pick). Only set when the
 	// synthesis call was made with candidate images.
 	AvatarChoice int
+	// RawResponse is the model's unprocessed output, kept for audit logging.
+	RawResponse string
 }
 
 // CharacterDetails holds the extracted information about a character.
@@ -229,6 +231,7 @@ func (s *SynthesizerClient) FetchCharacter(ctx context.Context, analysis *Analys
 		if res.Status == SynthesisStatusOK || strings.HasPrefix(profile, "STATUS:") {
 			res.Reasoning = reasoning
 			res.ResearchData = dossier.String()
+			res.RawResponse = profile
 			return res, nil
 		}
 

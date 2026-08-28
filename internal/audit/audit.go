@@ -17,12 +17,13 @@ import (
 type Kind string
 
 const (
-	KindChat       Kind = "chat"
-	KindAmbient    Kind = "ambient"
-	KindAnalysis   Kind = "analysis"
-	KindSynthesis  Kind = "synthesis"
-	KindCompaction Kind = "compaction"
-	KindEdit       Kind = "edit"
+	KindChat         Kind = "chat"
+	KindAmbient      Kind = "ambient"
+	KindAmbientReply Kind = "ambient_reply"
+	KindAnalysis     Kind = "analysis"
+	KindSynthesis    Kind = "synthesis"
+	KindCompaction   Kind = "compaction"
+	KindEdit         Kind = "edit"
 )
 
 // Turn is one LLM exchange to append to the audit trail.

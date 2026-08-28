@@ -206,12 +206,17 @@ func (c *createCharacterCmd) fetchAndSetupCharacter(ctx context.Context, s Disco
 		}
 		synthesisPrompt += fmt.Sprintf("\n\nAvatar candidates: %d (model pick: %s)", len(candidates), pick)
 	}
+
+	synthesisResponse := res.PersonaSpec
+	if res.RawResponse != "" {
+		synthesisResponse = res.RawResponse
+	}
 	c.audit.Log(ctx, i.GuildID, "", characterID, uuid.New().String(), audit.Turn{
 		Kind:      audit.KindSynthesis,
 		Latency:   latency,
 		Prompt:    synthesisPrompt,
 		Reasoning: res.Reasoning,
-		Response:  res.PersonaSpec,
+		Response:  synthesisResponse,
 	})
 
 	// Handle Synthesis Status

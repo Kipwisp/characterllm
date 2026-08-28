@@ -232,7 +232,7 @@ func TestLoadConfigDefaults(t *testing.T) {
 func TestLoadConfigAmbient(t *testing.T) {
 	ambientVars := []string{
 		"AMBIENT_ENABLED", "AMBIENT_MIN_SECONDS", "AMBIENT_MAX_SECONDS",
-		"AMBIENT_REPLY_COUNT", "AMBIENT_TICK_PROBABILITY",
+		"AMBIENT_REPLY_COUNT", "AMBIENT_TICK_PROBABILITY", "AMBIENT_REPLY_PROBABILITY",
 	}
 	for _, v := range ambientVars {
 		t.Setenv(v, "")
@@ -245,14 +245,17 @@ func TestLoadConfigAmbient(t *testing.T) {
 		if !a.Enabled {
 			t.Error("Expected default AMBIENT_ENABLED true")
 		}
-		if a.MinSeconds != 120 || a.MaxSeconds != 600 {
-			t.Errorf("Expected default interval 120-600, got %d-%d", a.MinSeconds, a.MaxSeconds)
+		if a.MinSeconds != 14400 || a.MaxSeconds != 21600 {
+			t.Errorf("Expected default interval 14400-21600, got %d-%d", a.MinSeconds, a.MaxSeconds)
 		}
 		if a.ReplyCount != 5 {
 			t.Errorf("Expected default AMBIENT_REPLY_COUNT 5, got %d", a.ReplyCount)
 		}
 		if a.TickProbability != 0.5 {
 			t.Errorf("Expected default AMBIENT_TICK_PROBABILITY 0.5, got %v", a.TickProbability)
+		}
+		if a.ReplyProbability != 0.1 {
+			t.Errorf("Expected default AMBIENT_REPLY_PROBABILITY 0.1, got %v", a.ReplyProbability)
 		}
 	})
 
@@ -262,6 +265,7 @@ func TestLoadConfigAmbient(t *testing.T) {
 		os.Setenv("AMBIENT_MAX_SECONDS", "90")
 		os.Setenv("AMBIENT_REPLY_COUNT", "8")
 		os.Setenv("AMBIENT_TICK_PROBABILITY", "0.25")
+		os.Setenv("AMBIENT_REPLY_PROBABILITY", "0.75")
 		defer func() {
 			for _, v := range ambientVars {
 				os.Unsetenv(v)
@@ -282,16 +286,21 @@ func TestLoadConfigAmbient(t *testing.T) {
 		if a.TickProbability != 0.25 {
 			t.Errorf("Expected AMBIENT_TICK_PROBABILITY 0.25, got %v", a.TickProbability)
 		}
+		if a.ReplyProbability != 0.75 {
+			t.Errorf("Expected AMBIENT_REPLY_PROBABILITY 0.75, got %v", a.ReplyProbability)
+		}
 	})
 
 	t.Run("clamping", func(t *testing.T) {
 		os.Setenv("AMBIENT_MIN_SECONDS", "300")
 		os.Setenv("AMBIENT_MAX_SECONDS", "60")
 		os.Setenv("AMBIENT_TICK_PROBABILITY", "5")
+		os.Setenv("AMBIENT_REPLY_PROBABILITY", "-2")
 		defer func() {
 			os.Unsetenv("AMBIENT_MIN_SECONDS")
 			os.Unsetenv("AMBIENT_MAX_SECONDS")
 			os.Unsetenv("AMBIENT_TICK_PROBABILITY")
+			os.Unsetenv("AMBIENT_REPLY_PROBABILITY")
 		}()
 
 		cfg := LoadConfig()
@@ -301,6 +310,9 @@ func TestLoadConfigAmbient(t *testing.T) {
 		}
 		if a.TickProbability != 1 {
 			t.Errorf("Expected probability clamped to 1, got %v", a.TickProbability)
+		}
+		if a.ReplyProbability != 0 {
+			t.Errorf("Expected probability clamped to 0, got %v", a.ReplyProbability)
 		}
 	})
 }

@@ -481,6 +481,9 @@ func TestSynthesizer_AvatarPick(t *testing.T) {
 		if strings.Contains(res.PersonaSpec, "AVATAR") {
 			t.Errorf("avatar line leaked into persona spec: %q", res.PersonaSpec)
 		}
+		if res.RawResponse != "AVATAR: 3\n### Identity & Temperament\nDetailed spec" {
+			t.Errorf("expected the raw output with the AVATAR line, got %q", res.RawResponse)
+		}
 		if len(capturedImages) != 1 || capturedImages[0] != "data:image/png;base64,row" {
 			t.Errorf("expected the row data URI on the message, got %v", capturedImages)
 		}

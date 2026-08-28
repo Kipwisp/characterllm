@@ -1,15 +1,18 @@
 package discord
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"characterllm/internal/audit"
+	"characterllm/internal/config"
 	"characterllm/internal/conversation"
 	"characterllm/internal/llm"
 	"characterllm/internal/session"
@@ -897,5 +900,355 @@ func TestCompaction_TriggeredThroughHandler(t *testing.T) {
 	}
 	if summary != "SUMMARY_TEXT" {
 		t.Errorf("Expected summary to be stored after handler-triggered compaction, got %q", summary)
+	}
+}
+
+func setupAmbientReplyChat(t *testing.T) (*Chat, *mockLLMClient, *session.Manager, string) {
+	t.Helper()
+	c, llmMock, sm, dbPath := setupChat(t)
+	c.Config.Ambient = config.AmbientConfig{Enabled: true, ReplyProbability: 0.5}
+	return c, llmMock, sm, dbPath
+}
+
+func newAmbientReplyMessage() *discordgo.MessageCreate {
+	m := &discordgo.MessageCreate{
+		Message: &discordgo.Message{
+			ID:      "usermsg1",
+			Content: "i think we should go",
+			Author:  &discordgo.User{ID: "alice", Username: "alice", Bot: false},
+			ReferencedMessage: &discordgo.Message{
+				ID:      "refmsg1",
+				Author:  &discordgo.User{ID: "bob", Username: "bob"},
+				Content: "we should go tomorrow",
+			},
+		},
+	}
+	m.GuildID = "guild1"
+	m.ChannelID = "chan1"
+	return m
+}
+
+// mockTranscriptSession serves the channel transcript (newest-first, like
+// Discord) the ambient reply gate fetches: bob's line, then alice's.
+func mockTranscriptSession() *mockDiscordSession {
+	return &mockDiscordSession{
+		GetUserMentionFn: func() string { return "<@123>" },
+		GetUserIDFn:      func() string { return "bot123" },
+		ChannelMessagesFn: func(channelID string, limit int, beforeID, afterID, aroundID string) ([]*discordgo.Message, error) {
+			return []*discordgo.Message{
+				{ID: "usermsg1", Content: "i think we should go", Author: &discordgo.User{ID: "alice", Username: "alice"}},
+				{ID: "refmsg1", Content: "we should go tomorrow", Author: &discordgo.User{ID: "bob", Username: "bob"}},
+			}, nil
+		},
+	}
+}
+
+func TestHandleMessageCreate_AmbientReplyGatePasses(t *testing.T) {
+	c, llmMock, sm, dbPath := setupAmbientReplyChat(t)
+	defer os.Remove(dbPath)
+
+	ctx := context.Background()
+	guildID := "guild1"
+	charID := "char1"
+	sm.SaveCharacterCard(ctx, guildID, &session.CharacterCard{
+		CharacterID: charID,
+		DisplayName: "TestChar",
+		Description: "A test character",
+	})
+	sm.SetActiveCharacter(ctx, guildID, charID)
+	if err := sm.SetAmbientChannel(ctx, guildID, "chan1"); err != nil {
+		t.Fatalf("SetAmbientChannel failed: %v", err)
+	}
+
+	auditDir := t.TempDir()
+	c.Audit = audit.NewAuditLogger(auditDir, true)
+	c.Roll = func() float64 { return 0.1 }
+
+	sentResponse := ""
+	var replyRef *discordgo.MessageReference
+	s := mockTranscriptSession()
+	s.ChannelMessageSendReplyFn = func(channelID string, content string, response *discordgo.MessageReference) (*discordgo.Message, error) {
+		sentResponse = content
+		replyRef = response
+		return nil, nil
+	}
+
+	var captured []llm.Message
+	llmMock.GenerateResponseFn = func(ctx context.Context, messages []llm.Message, model string) (string, string, error) {
+		captured = messages
+		return "Sure, tomorrow works.", "Reasoning", nil
+	}
+
+	c.Handle(s, newAmbientReplyMessage())
+
+	if sentResponse != "Sure, tomorrow works." {
+		t.Fatalf("Expected the ambient reply turn to run, got %q", sentResponse)
+	}
+	if replyRef == nil || replyRef.MessageID != "usermsg1" {
+		t.Errorf("Expected a reply reference to the user's message, got %+v", replyRef)
+	}
+	if len(captured) == 0 {
+		t.Fatal("Expected LLM messages to be captured")
+	}
+	last := captured[len(captured)-1]
+	expectedCue := ambientTranscriptHeader + "\n" +
+		"bob: we should go tomorrow\nalice: i think we should go\n" +
+		ambientTranscriptFooter
+	if last.Content != expectedCue {
+		t.Errorf("Expected the reply-mode transcript cue, got %q", last.Content)
+	}
+
+	auditLogged := false
+	for _, f := range mustReadDir(t, auditDir) {
+		data, err := os.ReadFile(filepath.Join(auditDir, f.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(data, []byte("kind=ambient_reply")) {
+			auditLogged = true
+		}
+	}
+	if !auditLogged {
+		t.Error("Expected an ambient_reply audit entry")
+	}
+}
+
+func TestHandleMessageCreate_AmbientReplyGateFails(t *testing.T) {
+	c, llmMock, sm, dbPath := setupAmbientReplyChat(t)
+	defer os.Remove(dbPath)
+
+	ctx := context.Background()
+	guildID := "guild1"
+	charID := "char1"
+	sm.SaveCharacterCard(ctx, guildID, &session.CharacterCard{
+		CharacterID: charID,
+		DisplayName: "TestChar",
+		Description: "A test character",
+	})
+	sm.SetActiveCharacter(ctx, guildID, charID)
+	if err := sm.SetAmbientChannel(ctx, guildID, "chan1"); err != nil {
+		t.Fatalf("SetAmbientChannel failed: %v", err)
+	}
+
+	c.Roll = func() float64 { return 0.9 }
+
+	sent := false
+	s := &mockDiscordSession{
+		GetUserMentionFn: func() string { return "<@123>" },
+		ChannelMessageSendReplyFn: func(channelID string, content string, response *discordgo.MessageReference) (*discordgo.Message, error) {
+			sent = true
+			return nil, nil
+		},
+	}
+	llmCalls := 0
+	llmMock.GenerateResponseFn = func(ctx context.Context, messages []llm.Message, model string) (string, string, error) {
+		llmCalls++
+		return "nope", "", nil
+	}
+
+	c.Handle(s, newAmbientReplyMessage())
+
+	if llmCalls != 0 {
+		t.Errorf("Expected no LLM call on a failed gate roll, got %d", llmCalls)
+	}
+	if sent {
+		t.Error("Expected no reply on a failed gate roll")
+	}
+}
+
+func TestHandleMessageCreate_AmbientReplyOutsideAmbientChannel(t *testing.T) {
+	run := func(t *testing.T, setChannel bool) {
+		c, llmMock, sm, dbPath := setupAmbientReplyChat(t)
+		defer os.Remove(dbPath)
+
+		ctx := context.Background()
+		guildID := "guild1"
+		charID := "char1"
+		sm.SaveCharacterCard(ctx, guildID, &session.CharacterCard{
+			CharacterID: charID,
+			DisplayName: "TestChar",
+			Description: "A test character",
+		})
+		sm.SetActiveCharacter(ctx, guildID, charID)
+		if setChannel {
+			if err := sm.SetAmbientChannel(ctx, guildID, "other"); err != nil {
+				t.Fatalf("SetAmbientChannel failed: %v", err)
+			}
+		}
+
+		c.Roll = func() float64 { return 0.0 }
+
+		s := &mockDiscordSession{
+			GetUserMentionFn: func() string { return "<@123>" },
+		}
+		llmCalls := 0
+		llmMock.GenerateResponseFn = func(ctx context.Context, messages []llm.Message, model string) (string, string, error) {
+			llmCalls++
+			return "nope", "", nil
+		}
+
+		c.Handle(s, newAmbientReplyMessage())
+
+		if llmCalls != 0 {
+			t.Errorf("Expected no LLM call, got %d", llmCalls)
+		}
+	}
+
+	t.Run("no ambient channel set", func(t *testing.T) { run(t, false) })
+	t.Run("different ambient channel", func(t *testing.T) { run(t, true) })
+}
+
+func TestHandleMessageCreate_MentionPlusReplyRunsOneTurn(t *testing.T) {
+	c, llmMock, sm, dbPath := setupAmbientReplyChat(t)
+	defer os.Remove(dbPath)
+
+	ctx := context.Background()
+	guildID := "guild1"
+	charID := "char1"
+	sm.SaveCharacterCard(ctx, guildID, &session.CharacterCard{
+		CharacterID: charID,
+		DisplayName: "TestChar",
+		Description: "A test character",
+	})
+	sm.SetActiveCharacter(ctx, guildID, charID)
+	if err := sm.SetAmbientChannel(ctx, guildID, "chan1"); err != nil {
+		t.Fatalf("SetAmbientChannel failed: %v", err)
+	}
+
+	c.Roll = func() float64 { return 0.0 }
+
+	sentResponse := ""
+	s := &mockDiscordSession{
+		GetUserMentionFn: func() string { return "<@123>" },
+		ChannelMessageSendReplyFn: func(channelID string, content string, response *discordgo.MessageReference) (*discordgo.Message, error) {
+			sentResponse = content
+			return nil, nil
+		},
+	}
+
+	llmCalls := 0
+	var captured []llm.Message
+	llmMock.GenerateResponseFn = func(ctx context.Context, messages []llm.Message, model string) (string, string, error) {
+		llmCalls++
+		captured = messages
+		return "Hello from LLM!", "Reasoning", nil
+	}
+
+	m := newAmbientReplyMessage()
+	m.Message.Content = "<@123> i think we should go"
+	c.Handle(s, m)
+
+	if llmCalls != 1 {
+		t.Fatalf("Expected exactly one LLM call (the mention turn), got %d", llmCalls)
+	}
+	if sentResponse != "Hello from LLM!" {
+		t.Errorf("Expected the mention turn reply, got %q", sentResponse)
+	}
+	last := captured[len(captured)-1]
+	if strings.Contains(last.Content, "Replying to") {
+		t.Errorf("Expected the plain mention prompt, got %q", last.Content)
+	}
+	if !strings.Contains(last.Content, "alice: i think we should go") {
+		t.Errorf("Expected the mention-stripped content in %q", last.Content)
+	}
+}
+
+func TestHandleMessageCreate_AmbientReplyEmptyTranscript(t *testing.T) {
+	c, llmMock, sm, dbPath := setupAmbientReplyChat(t)
+	defer os.Remove(dbPath)
+
+	ctx := context.Background()
+	guildID := "guild1"
+	charID := "char1"
+	sm.SaveCharacterCard(ctx, guildID, &session.CharacterCard{
+		CharacterID: charID,
+		DisplayName: "TestChar",
+		Description: "A test character",
+	})
+	sm.SetActiveCharacter(ctx, guildID, charID)
+	if err := sm.SetAmbientChannel(ctx, guildID, "chan1"); err != nil {
+		t.Fatalf("SetAmbientChannel failed: %v", err)
+	}
+
+	c.Roll = func() float64 { return 0.1 }
+
+	s := mockTranscriptSession()
+	s.ChannelMessagesFn = func(channelID string, limit int, beforeID, afterID, aroundID string) ([]*discordgo.Message, error) {
+		// Only the bot's own message: filtered out of the transcript.
+		return []*discordgo.Message{
+			{ID: "botmsg1", Content: "something I said", Author: &discordgo.User{ID: "bot123", Username: "bot"}},
+		}, nil
+	}
+
+	llmCalls := 0
+	llmMock.GenerateResponseFn = func(ctx context.Context, messages []llm.Message, model string) (string, string, error) {
+		llmCalls++
+		return "nope", "", nil
+	}
+
+	c.Handle(s, newAmbientReplyMessage())
+
+	if llmCalls != 0 {
+		t.Errorf("Expected no LLM call for an empty transcript, got %d", llmCalls)
+	}
+}
+
+func mustReadDir(t *testing.T, dir string) []os.DirEntry {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return entries
+}
+
+func TestHandleMessageCreate_AmbientReplyPlainMessage(t *testing.T) {
+	c, llmMock, sm, dbPath := setupAmbientReplyChat(t)
+	defer os.Remove(dbPath)
+
+	ctx := context.Background()
+	guildID := "guild1"
+	charID := "char1"
+	sm.SaveCharacterCard(ctx, guildID, &session.CharacterCard{
+		CharacterID: charID,
+		DisplayName: "TestChar",
+		Description: "A test character",
+	})
+	sm.SetActiveCharacter(ctx, guildID, charID)
+	if err := sm.SetAmbientChannel(ctx, guildID, "chan1"); err != nil {
+		t.Fatalf("SetAmbientChannel failed: %v", err)
+	}
+
+	c.Roll = func() float64 { return 0.1 }
+
+	sentResponse := ""
+	s := mockTranscriptSession()
+	s.ChannelMessageSendReplyFn = func(channelID string, content string, response *discordgo.MessageReference) (*discordgo.Message, error) {
+		sentResponse = content
+		return nil, nil
+	}
+
+	var captured []llm.Message
+	llmMock.GenerateResponseFn = func(ctx context.Context, messages []llm.Message, model string) (string, string, error) {
+		captured = messages
+		return "Oh, interesting.", "", nil
+	}
+
+	m := newAmbientReplyMessage()
+	m.Message.ReferencedMessage = nil
+	c.Handle(s, m)
+
+	if sentResponse != "Oh, interesting." {
+		t.Fatalf("Expected a plain message in the ambient channel to roll the gate, got %q", sentResponse)
+	}
+	if len(captured) == 0 {
+		t.Fatal("Expected LLM messages to be captured")
+	}
+	last := captured[len(captured)-1]
+	if !strings.HasPrefix(last.Content, ambientTranscriptHeader+"\n") {
+		t.Errorf("Expected the reply-mode transcript cue, got %q", last.Content)
+	}
+	if !strings.Contains(last.Content, "alice: i think we should go") {
+		t.Errorf("Expected the transcript line in %q", last.Content)
 	}
 }

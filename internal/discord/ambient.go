@@ -183,7 +183,7 @@ func (a *Ambient) tick(ctx context.Context, guildID, channelID string) {
 		return
 	}
 	if details == nil || details.CharacterID == "" {
-		logger.FromContext(ctx).Info("ambient tick skipped: no active character", "guild_id", guildID)
+		logger.FromContext(ctx).Debug("ambient tick skipped: no active character", "guild_id", guildID)
 		return
 	}
 
@@ -191,7 +191,27 @@ func (a *Ambient) tick(ctx context.Context, guildID, channelID string) {
 	if !ok {
 		return
 	}
+
+	logger.FromContext(ctx).Debug("ambient tick passed the check: sending message", "guild_id", guildID)
 	a.Chat.runTurn(ctx, a.Discord, guildID, channelID, userContent, imageDataURIs, nil, audit.KindAmbient, reqID)
+}
+
+// buildTranscriptCue fetches the channel's recent messages and builds the
+// reply-mode cue: the transcript of messages the bot has not already
+// answered, framed with the header/footer cues, plus the transcript's image
+// data URIs. It returns an error when the fetch fails and an empty cue when
+// nothing remains after filtering.
+func buildTranscriptCue(ctx context.Context, s commands.DiscordSession, cfg *config.Config, imageClient images.ImageClient, channelID string) (string, []string, error) {
+	msgs, err := s.ChannelMessages(channelID, cfg.Ambient.ReplyCount, "", "", "")
+	if err != nil {
+		return "", nil, err
+	}
+	lines, imageURLs := extractTranscript(msgs, s.GetUserID(), cfg)
+	if len(lines) == 0 {
+		return "", nil, nil
+	}
+	content := ambientTranscriptHeader + "\n" + strings.Join(lines, "\n") + "\n" + ambientTranscriptFooter
+	return content, collectImageURIs(ctx, imageClient, imageURLs), nil
 }
 
 // buildCue builds the synthetic user message (and any transcript images) for
@@ -202,18 +222,15 @@ func (a *Ambient) buildCue(ctx context.Context, channelID string) (string, []str
 		return ambientTopicCue, nil, true
 	}
 
-	msgs, err := a.Discord.ChannelMessages(channelID, a.Config.Ambient.ReplyCount, "", "", "")
+	cue, imageDataURIs, err := buildTranscriptCue(ctx, a.Discord, a.Config, a.ImageClient, channelID)
 	if err != nil {
 		logger.FromContext(ctx).Warn("ambient transcript fetch failed", "error", err)
 		return "", nil, false
 	}
-
-	lines, imageURLs := a.extractTranscript(msgs)
-	if len(lines) == 0 {
+	if cue == "" {
 		return ambientTopicCue, nil, true
 	}
-	content := ambientTranscriptHeader + "\n" + strings.Join(lines, "\n") + "\n" + ambientTranscriptFooter
-	return content, a.collectImageURIs(ctx, imageURLs), true
+	return cue, imageDataURIs, true
 }
 
 // extractTranscript formats the channel chatter as "Name: message" lines and
@@ -221,27 +238,26 @@ func (a *Ambient) buildCue(ctx context.Context, channelID string) (string, []str
 // when vision is enabled). Messages the bot would already have answered are
 // left out: the bot's own messages, mentions of the bot, and replies to a
 // bot message that falls inside the fetched window.
-func (a *Ambient) extractTranscript(msgs []*discordgo.Message) (lines, imageURLs []string) {
+func extractTranscript(msgs []*discordgo.Message, botID string, cfg *config.Config) (lines, imageURLs []string) {
 	// Discord returns the fetched messages newest-first; reverse so the
 	// transcript reads chronologically.
 	for i, j := 0, len(msgs)-1; i < j; i, j = i+1, j-1 {
 		msgs[i], msgs[j] = msgs[j], msgs[i]
 	}
-	botID := a.Discord.GetUserID()
 	byID := make(map[string]*discordgo.Message, len(msgs))
 	for _, m := range msgs {
 		byID[m.ID] = m
 	}
 	for _, m := range msgs {
-		if m.Author == nil || m.Author.ID == botID || a.messageAddressesBot(m, botID, byID) {
+		if m.Author == nil || m.Author.ID == botID || messageAddressesBot(m, botID, byID) {
 			continue
 		}
 		if m.Content != "" {
 			lines = append(lines, m.Author.Username+": "+m.Content)
 		}
-		if a.Config.LLM.Vision {
+		if cfg.LLM.Vision {
 			for _, att := range m.Attachments {
-				if strings.HasPrefix(att.ContentType, "image/") && len(imageURLs) < a.Config.LLM.MaxImages {
+				if strings.HasPrefix(att.ContentType, "image/") && len(imageURLs) < cfg.LLM.MaxImages {
 					imageURLs = append(imageURLs, att.URL)
 				}
 			}
@@ -253,7 +269,7 @@ func (a *Ambient) extractTranscript(msgs []*discordgo.Message) (lines, imageURLs
 // messageAddressesBot reports whether m mentions the bot or replies to a bot
 // message within the fetched window — the two forms of address that trigger
 // a normal bot reply (getPrompt).
-func (a *Ambient) messageAddressesBot(m *discordgo.Message, botID string, byID map[string]*discordgo.Message) bool {
+func messageAddressesBot(m *discordgo.Message, botID string, byID map[string]*discordgo.Message) bool {
 	for _, u := range m.Mentions {
 		if u.ID == botID {
 			return true
@@ -267,10 +283,10 @@ func (a *Ambient) messageAddressesBot(m *discordgo.Message, botID string, byID m
 	return false
 }
 
-func (a *Ambient) collectImageURIs(ctx context.Context, urls []string) []string {
+func collectImageURIs(ctx context.Context, imageClient images.ImageClient, urls []string) []string {
 	var dataURIs []string
 	for _, u := range urls {
-		duri, err := a.ImageClient.ImageToDataURI(ctx, u)
+		duri, err := imageClient.ImageToDataURI(ctx, u)
 		if err != nil {
 			logger.FromContext(ctx).Warn("skipping unreadable transcript image", "url", u, "error", err)
 			continue
