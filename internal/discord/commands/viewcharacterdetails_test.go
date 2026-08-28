@@ -445,43 +445,54 @@ func TestViewCharacterDetailsCmd_ViewCurrent_NoneActive(t *testing.T) {
 	}
 }
 
-func TestAutocompleteCharacters_CurrentSuggestion(t *testing.T) {
+func TestAutocompleteCharacters_ActiveMarker(t *testing.T) {
 	cmdCtx, _, dbPath := setupCommandTest(t)
 	defer os.Remove(dbPath)
 
-	cmdCtx.Session.SaveCharacterCard(context.Background(), "guild1", &session.CharacterCard{
+	ctx := context.Background()
+	cmdCtx.Session.SaveCharacterCard(ctx, "guild1", &session.CharacterCard{
 		CharacterID: "miles-morales-ca8da118",
 		DisplayName: "Miles Morales",
 	})
-
-	// Empty query offers "current" first.
-	choices := autocompleteCharacters(context.Background(), cmdCtx.Session, "guild1", "", true)
-	if len(choices) == 0 || choices[0].Value != currentCardName {
-		t.Errorf("expected current suggestion first for empty query, got %v", choices)
+	cmdCtx.Session.SaveCharacterCard(ctx, "guild1", &session.CharacterCard{
+		CharacterID: "peter-parker-00000001",
+		DisplayName: "Peter Parker",
+	})
+	if err := cmdCtx.Session.SetActiveCharacter(ctx, "guild1", "miles-morales-ca8da118"); err != nil {
+		t.Fatalf("SetActiveCharacter failed: %v", err)
 	}
 
-	// Query matching "current" offers it.
-	choices = autocompleteCharacters(context.Background(), cmdCtx.Session, "guild1", "cur", true)
-	found := false
+	// Empty query offers "current" first and marks the active character.
+	choices := autocompleteCharacters(ctx, cmdCtx.Session, "guild1", "", true)
+	if len(choices) != 3 {
+		t.Fatalf("expected 3 choices (current + 2 cards), got %v", choices)
+	}
+	if choices[0].Value != currentCardName || choices[0].Name != currentChoiceLabel {
+		t.Errorf("expected the current choice first, got %+v", choices[0])
+	}
 	for _, c := range choices {
-		if c.Value == currentCardName {
-			found = true
+		switch c.Value {
+		case "miles-morales-ca8da118":
+			if c.Name != "Miles Morales miles-morales-ca8da118 (active)" {
+				t.Errorf("expected the active marker on Miles, got %+v", c)
+			}
+		default:
+			if strings.HasSuffix(c.Name, " (active)") {
+				t.Errorf("unexpected active marker on %+v", c)
+			}
 		}
 	}
-	if !found {
-		t.Errorf("expected current suggestion for query 'cur', got %v", choices)
+
+	// A matching name still surfaces with the marker.
+	choices = autocompleteCharacters(ctx, cmdCtx.Session, "guild1", "mil", true)
+	if len(choices) != 1 || choices[0].Name != "Miles Morales miles-morales-ca8da118 (active)" {
+		t.Errorf("expected the marked card match for 'mil', got %v", choices)
 	}
 
-	// A matching name still surfaces alongside current-free results.
-	choices = autocompleteCharacters(context.Background(), cmdCtx.Session, "guild1", "mil", true)
-	if len(choices) != 1 || choices[0].Value != "miles-morales-ca8da118" {
-		t.Errorf("expected the card match for 'mil', got %v", choices)
-	}
-
-	// No match falls back to current + placeholder.
-	choices = autocompleteCharacters(context.Background(), cmdCtx.Session, "guild1", "zzz", true)
+	// No card matches: current plus the placeholder.
+	choices = autocompleteCharacters(ctx, cmdCtx.Session, "guild1", "zzz", true)
 	if len(choices) != 2 || choices[0].Value != currentCardName || choices[1].Value != "none" {
-		t.Errorf("expected current + placeholder fallback, got %v", choices)
+		t.Errorf("expected current and placeholder, got %v", choices)
 	}
 }
 

@@ -59,6 +59,7 @@ func New(d Deps) *Registry {
 	setCharacter := &setCharacterCmd{session: d.Session, imageClient: d.ImageClient}
 	createCharacter := &createCharacterCmd{session: d.Session, imageClient: d.ImageClient, synthesizer: d.Synthesizer, audit: d.Audit, config: d.Config}
 	deleteCharacter := &deleteCharacterCmd{session: d.Session, imageClient: d.ImageClient}
+	deleteThread := &deleteThreadCmd{session: d.Session, lock: d.Lock}
 	editCharacter := &editCharacterCmd{session: d.Session, imageClient: d.ImageClient, synthesizer: d.Synthesizer, audit: d.Audit}
 	viewCharacter := &viewCharacterCmd{session: d.Session, imageClient: d.ImageClient}
 
@@ -71,12 +72,17 @@ func New(d Deps) *Registry {
 		componentPrefixes: []prefixRoute{
 			{prefix: deleteConfirmPrefix, handle: deleteCharacter.handleDeleteConfirm},
 			{prefix: deleteCancelPrefix, handle: deleteCharacter.handleDeleteCancel},
+			{prefix: deleteThreadConfirmPrefix, handle: deleteThread.handleDeleteConfirm},
+			{prefix: deleteThreadCancelPrefix, handle: deleteThread.handleDeleteCancel},
 			{prefix: editAcceptPrefix, handle: editCharacter.handleEditAccept},
 			{prefix: editRejectPrefix, handle: editCharacter.handleEditReject},
 		},
 	}
 	for _, cmd := range []slashCommand{
-		&resetChatCmd{session: d.Session, lock: d.Lock},
+		&clearThreadCmd{session: d.Session, lock: d.Lock},
+		&newThreadCmd{session: d.Session, lock: d.Lock},
+		&setThreadCmd{session: d.Session, lock: d.Lock},
+		deleteThread,
 		&statusCmd{llm: d.LLM},
 		setCharacter,
 		viewCharacter,
@@ -105,17 +111,23 @@ func (r *Registry) Execute(ctx context.Context, name string, s DiscordSession, i
 }
 
 // HandleAutocomplete responds to autocomplete interactions on the character
-// name options by suggesting the guild's saved characters.
+// name options by suggesting the guild's saved characters, and on the thread
+// options by suggesting the active character's threads.
 func (r *Registry) HandleAutocomplete(ctx context.Context, s DiscordSession, i *discordgo.InteractionCreate) {
 	data := i.ApplicationCommandData()
 	if len(data.Options) == 0 || !data.Options[0].Focused {
 		return
 	}
 
-	// The "current (active character)" suggestion only makes sense for the
-	// commands that accept that key.
-	includeCurrent := data.Name == "viewcharacterdetails" || data.Name == "deletecharacter" || data.Name == "editcharacter"
-	choices := autocompleteCharacters(ctx, r.session, i.GuildID, data.Options[0].StringValue(), includeCurrent)
+	var choices []*discordgo.ApplicationCommandOptionChoice
+	switch data.Name {
+	case "setthread", "deletethread":
+		choices = autocompleteThreads(ctx, r.session, i.GuildID, data.Options[0].StringValue(), data.Name == "deletethread")
+	case "viewcharacterdetails", "deletecharacter", "editcharacter":
+		choices = autocompleteCharacters(ctx, r.session, i.GuildID, data.Options[0].StringValue(), true)
+	default:
+		choices = autocompleteCharacters(ctx, r.session, i.GuildID, data.Options[0].StringValue(), false)
+	}
 	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionApplicationCommandAutocompleteResult,
 		Data: &discordgo.InteractionResponseData{Choices: choices},

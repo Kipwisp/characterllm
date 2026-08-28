@@ -59,6 +59,16 @@ func (c *Chat) Handle(s commands.DiscordSession, m *discordgo.MessageCreate) {
 		return
 	}
 
+	// Give the character its default thread so the active pointer always
+	// resolves, then read the pointer (details was snapshotted before it).
+	if err := c.Session.EnsureDefaultThread(ctx, m.GuildID, details.CharacterID); err != nil {
+		logger.FromContext(ctx).Warn("failed to ensure default thread", "error", err)
+	}
+	threadID := details.ActiveThreadID
+	if resolved, err := c.Session.GetActiveThreadID(ctx, m.GuildID, details.CharacterID); err == nil && resolved != "" {
+		threadID = resolved
+	}
+
 	// Images are ephemeral: they ride along in this turn's prompt only and are never persisted to history.
 	var imageDataURIs []string
 	if c.Config.LLM.Vision {
@@ -67,18 +77,21 @@ func (c *Chat) Handle(s commands.DiscordSession, m *discordgo.MessageCreate) {
 
 	// Serialize the whole turn (save, assemble, generate, persist) so a queued
 	// turn assembles its prompt after the previous turn's reply is stored.
-	defer c.Locks.Lock(m.GuildID, "")()
+	defer c.Locks.Lock(m.GuildID, threadID)()
 
 	// Persist the incoming message before assembling the prompt
 	userMsg := llm.Message{Role: "user", Content: prompt, Images: imageDataURIs}
 	userTokens := c.LLM.EstimateTokens(ctx, []llm.Message{userMsg})
-	if err := c.Session.SaveMessage(ctx, m.GuildID, "", "user", prompt); err != nil {
+	if err := c.Session.SaveMessage(ctx, m.GuildID, threadID, "user", prompt); err != nil {
 		logger.FromContext(ctx).Error("error saving user message", "error", err)
+	}
+	if err := c.Session.TouchThread(ctx, m.GuildID, details.CharacterID, threadID); err != nil {
+		logger.FromContext(ctx).Warn("failed to touch thread", "error", err)
 	}
 
 	// compactionNeeded is true when the prompt exceeded the compaction target,
 	// which triggers compaction after the reply.
-	messages, compactionNeeded, err := c.PromptBuilder.Build(ctx, m.GuildID, "", details, prompt, imageDataURIs, userTokens)
+	messages, compactionNeeded, err := c.PromptBuilder.Build(ctx, m.GuildID, threadID, details, prompt, imageDataURIs, userTokens)
 	if err != nil {
 		logger.FromContext(ctx).Error("error assembling prompt", "error", err)
 		s.ChannelMessageSendReply(m.ChannelID, "Sorry, I had trouble remembering our conversation.", &discordgo.MessageReference{
@@ -88,13 +101,13 @@ func (c *Chat) Handle(s commands.DiscordSession, m *discordgo.MessageCreate) {
 	}
 
 	// Generate and send response
-	if err := c.processChat(ctx, s, m, "", details.CharacterID, prompt, messages, reqID); err != nil {
+	if err := c.processChat(ctx, s, m, threadID, details.CharacterID, prompt, messages, reqID); err != nil {
 		logger.FromContext(ctx).Error("error processing chat", "error", err)
 	}
 
 	// Compact as soon as possible after the reply when the soft target was exceeded
 	if compactionNeeded {
-		c.Compactor.Compact(ctx, m.GuildID, "", details.CharacterID, reqID)
+		c.Compactor.Compact(ctx, m.GuildID, threadID, details.CharacterID, reqID)
 	}
 }
 
@@ -207,11 +220,11 @@ func (c *Chat) processChat(ctx context.Context, s commands.DiscordSession, m *di
 		return fmt.Errorf("error sending response: %v", err)
 	}
 
-	c.Session.SaveMessage(ctx, m.GuildID, "", "assistant", visible)
+	c.Session.SaveMessage(ctx, m.GuildID, threadID, "assistant", visible)
 
 	// Attach the image descriptions to the user's turn so future prompts and compaction can see what the (ephemeral) images depicted.
 	if imageNotes != "" {
-		if err := c.Session.AppendToLastUserMessage(ctx, m.GuildID, "", "\n[Image: "+imageNotes+"]"); err != nil {
+		if err := c.Session.AppendToLastUserMessage(ctx, m.GuildID, threadID, "\n[Image: "+imageNotes+"]"); err != nil {
 			logger.FromContext(ctx).Error("failed to attach image note to history", "error", err)
 		}
 	}

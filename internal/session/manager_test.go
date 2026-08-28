@@ -80,19 +80,38 @@ func TestCountCharacterThreads(t *testing.T) {
 	m.SaveCharacterCard(ctx, "guild1", &CharacterCard{CharacterID: "char1", DisplayName: "A"})
 	m.SaveCharacterCard(ctx, "guild1", &CharacterCard{CharacterID: "char2", DisplayName: "B"})
 	m.SetActiveCharacter(ctx, "guild1", "char2")
-	// Three messages across two threads for char2.
-	m.SaveMessage(ctx, "guild1", "thread-a", "user", "for char2")
-	m.SaveMessage(ctx, "guild1", "thread-a", "assistant", "for char2")
-	m.SaveMessage(ctx, "guild1", "thread-b", "user", "for char2")
 
-	// Counts the named character, not just the active one.
+	// Legacy history (no threads rows yet) counts as zero until promoted.
+	m.SaveMessage(ctx, "guild1", "thread-a", "user", "for char2")
 	count, err := m.CountCharacterThreads(ctx, "guild1", "char1")
 	if err != nil || count != 0 {
 		t.Errorf("expected 0 for char1, got %d (err %v)", count, err)
 	}
 	count, err = m.CountCharacterThreads(ctx, "guild1", "char2")
+	if err != nil || count != 0 {
+		t.Errorf("expected 0 before promotion for char2, got %d (err %v)", count, err)
+	}
+
+	// Promotion adds the default thread; created threads are counted.
+	if err := m.EnsureDefaultThread(ctx, "guild1", "char2"); err != nil {
+		t.Fatalf("EnsureDefaultThread failed: %v", err)
+	}
+	count, err = m.CountCharacterThreads(ctx, "guild1", "char2")
+	if err != nil || count != 1 {
+		t.Errorf("expected 1 after promotion for char2, got %d (err %v)", count, err)
+	}
+	if _, err := m.CreateThread(ctx, "guild1", "char2", "Side quest"); err != nil {
+		t.Fatalf("CreateThread failed: %v", err)
+	}
+	count, err = m.CountCharacterThreads(ctx, "guild1", "char2")
 	if err != nil || count != 2 {
 		t.Errorf("expected 2 for char2, got %d (err %v)", count, err)
+	}
+
+	// Counts the named character, not just the active one.
+	count, err = m.CountCharacterThreads(ctx, "guild1", "char1")
+	if err != nil || count != 0 {
+		t.Errorf("expected 0 for char1, got %d (err %v)", count, err)
 	}
 }
 
@@ -535,7 +554,7 @@ func TestAppendToLastUserMessage(t *testing.T) {
 	})
 }
 
-func TestGetLastMessageForCharacter(t *testing.T) {
+func TestGetLastCharacterMessage(t *testing.T) {
 	m, tmpFile := setupManager(t)
 	defer os.Remove(tmpFile)
 	defer m.Close()
@@ -547,43 +566,51 @@ func TestGetLastMessageForCharacter(t *testing.T) {
 	m.SetActiveCharacter(ctx, guildID, charID)
 
 	t.Run("no history returns false", func(t *testing.T) {
-		if _, ok := m.GetLastMessageForCharacter(ctx, guildID, charID); ok {
+		if _, ok := m.GetLastCharacterMessage(ctx, guildID, charID, "1"); ok {
 			t.Error("expected no history to report false")
 		}
 	})
 
-	t.Run("most recent thread's last message wins", func(t *testing.T) {
-		m.SaveMessage(ctx, guildID, "thread-a", "user", "a1")
-		m.SaveMessage(ctx, guildID, "thread-a", "assistant", "a2")
-		m.SaveMessage(ctx, guildID, "thread-b", "user", "b1")
-		m.SaveMessage(ctx, guildID, "thread-b", "assistant", "b2")
+	t.Run("scoped to the named character and thread", func(t *testing.T) {
+		m.SaveMessage(ctx, guildID, "1", "user", "a1")
+		m.SaveMessage(ctx, guildID, "1", "assistant", "a2")
+		m.SaveMessage(ctx, guildID, "2", "user", "b1")
+		m.SaveMessage(ctx, guildID, "2", "assistant", "b2")
 
-		got, ok := m.GetLastMessageForCharacter(ctx, guildID, charID)
+		got, ok := m.GetLastCharacterMessage(ctx, guildID, charID, "1")
+		if !ok || got != "a2" {
+			t.Errorf("expected last character message %q from thread 1, got %q (ok=%v)", "a2", got, ok)
+		}
+		got, ok = m.GetLastCharacterMessage(ctx, guildID, charID, "2")
 		if !ok || got != "b2" {
-			t.Errorf("expected last message %q from thread-b, got %q (ok=%v)", "b2", got, ok)
+			t.Errorf("expected last character message %q from thread 2, got %q (ok=%v)", "b2", got, ok)
 		}
 
-		// A newer message in thread-a makes it the most recently used thread.
-		m.SaveMessage(ctx, guildID, "thread-a", "assistant", "a3")
-		got, ok = m.GetLastMessageForCharacter(ctx, guildID, charID)
+		m.SaveMessage(ctx, guildID, "1", "assistant", "a3")
+		got, ok = m.GetLastCharacterMessage(ctx, guildID, charID, "1")
 		if !ok || got != "a3" {
-			t.Errorf("expected last message %q from thread-a, got %q (ok=%v)", "a3", got, ok)
+			t.Errorf("expected last character message %q from thread 1, got %q (ok=%v)", "a3", got, ok)
+		}
+
+		m.SetActiveCharacter(ctx, guildID, "char2")
+		m.SaveMessage(ctx, guildID, "3", "assistant", "c1")
+
+		// char1's history is unaffected by char2's new thread.
+		got, ok = m.GetLastCharacterMessage(ctx, guildID, charID, "1")
+		if !ok || got != "a3" {
+			t.Errorf("expected char1's last character message %q, got %q (ok=%v)", "a3", got, ok)
+		}
+		got, ok = m.GetLastCharacterMessage(ctx, guildID, "char2", "3")
+		if !ok || got != "c1" {
+			t.Errorf("expected char2's last character message %q, got %q (ok=%v)", "c1", got, ok)
 		}
 	})
 
-	t.Run("scoped to the named character", func(t *testing.T) {
-		m.SetActiveCharacter(ctx, guildID, "char2")
-		m.SaveMessage(ctx, guildID, "thread-c", "assistant", "c1")
-
-		// char1's history is unaffected by char2's new thread.
-		got, ok := m.GetLastMessageForCharacter(ctx, guildID, charID)
+	t.Run("skips user messages", func(t *testing.T) {
+		m.SaveMessage(ctx, guildID, "1", "user", "a4")
+		got, ok := m.GetLastCharacterMessage(ctx, guildID, charID, "1")
 		if !ok || got != "a3" {
-			t.Errorf("expected char1's last message %q, got %q (ok=%v)", "a3", got, ok)
-		}
-		got, ok = m.GetLastMessageForCharacter(ctx, guildID, "char2")
-		if !ok || got != "c1" {
-			t.Errorf("expected char2's last message %q, got %q (ok=%v)", "c1", got, ok)
+			t.Errorf("expected the user's newer message to be skipped, got %q (ok=%v)", got, ok)
 		}
 	})
 }
-

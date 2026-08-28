@@ -60,6 +60,11 @@ func (c *deleteCharacterCmd) Execute(ctx context.Context, s DiscordSession, i *d
 		},
 	}
 
+	// Give the character its default thread so the reported count is
+	// accurate and the active pointer resolves.
+	if err := c.session.EnsureDefaultThread(ctx, i.GuildID, card.CharacterID); err != nil {
+		logger.FromContext(ctx).Warn("failed to ensure default thread", "error", err, "characterID", card.CharacterID)
+	}
 	count, err := c.session.CountCharacterThreads(ctx, i.GuildID, card.CharacterID)
 	if err != nil {
 		logger.FromContext(ctx).Warn("failed to count threads before deletion confirmation", "error", err, "characterID", card.CharacterID)
@@ -108,6 +113,9 @@ func (c *deleteCharacterCmd) handleDeleteConfirm(ctx context.Context, s DiscordS
 	details, err := c.session.GetCharacterDetails(ctx, i.GuildID)
 	wasActive := err == nil && details != nil && details.CharacterID == characterID
 
+	if err := c.session.EnsureDefaultThread(ctx, i.GuildID, characterID); err != nil {
+		logger.FromContext(ctx).Warn("failed to ensure default thread", "error", err, "characterID", characterID)
+	}
 	count, err := c.session.CountCharacterThreads(ctx, i.GuildID, characterID)
 	if err != nil {
 		logger.FromContext(ctx).Warn("failed to count threads before deletion", "error", err, "characterID", characterID)

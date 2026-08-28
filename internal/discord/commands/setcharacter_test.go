@@ -157,8 +157,8 @@ func TestSetCharacterCmd_EchoesLastMessage(t *testing.T) {
 	})
 	// SaveMessage keys on the active character, so set it before seeding.
 	cmdCtx.Session.SetActiveCharacter(context.Background(), guildID, charID)
-	cmdCtx.Session.SaveMessage(context.Background(), guildID, "thread1", "user", "hi")
-	cmdCtx.Session.SaveMessage(context.Background(), guildID, "thread1", "assistant", "Hello, it's me.")
+	cmdCtx.Session.SaveMessage(context.Background(), guildID, "1", "user", "hi")
+	cmdCtx.Session.SaveMessage(context.Background(), guildID, "1", "assistant", "Hello, it's me.")
 
 	var capturedContent string
 	s.InteractionRespondFn = func(interaction *discordgo.Interaction, response *discordgo.InteractionResponse) error {

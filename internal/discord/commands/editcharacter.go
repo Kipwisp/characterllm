@@ -134,7 +134,7 @@ func (c *editCharacterCmd) Definition() *discordgo.ApplicationCommand {
 			},
 			{
 				Type:        discordgo.ApplicationCommandOptionString,
-				Name:        "instruction",
+				Name:        "edit",
 				Description: "New value for a field, or what to change in the persona.",
 				Required:    true,
 			},
@@ -174,7 +174,7 @@ func (c *editCharacterCmd) Execute(ctx context.Context, s DiscordSession, i *dis
 	}
 
 	sectionKey := optionValue(data, "section")
-	instruction := optionValue(data, "instruction")
+	instruction := optionValue(data, "edit")
 	if sectionKey == "" || instruction == "" {
 		say(responses.EditCharacter.MissingInput, discordgo.MessageFlagsEphemeral)
 		return fmt.Errorf("missing section or instruction")

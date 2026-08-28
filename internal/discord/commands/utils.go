@@ -30,11 +30,38 @@ const discordMessageLimit = 2000
 // maxAvatarBytes mirrors Discord's 10 MB avatar upload limit.
 const maxAvatarBytes = 10 << 20 // 10 MiB
 
+// choiceNameLimit is Discord's maximum length for an autocomplete choice name.
+const choiceNameLimit = 100
+
+// currentThreadChoiceLabel is the display name of the current-thread choice;
+// it is what users type to find it in autocomplete.
+const currentThreadChoiceLabel = "Current (active thread)"
+
+// currentChoiceLabel is the display name of the current-character choice;
+// it is what users type to find it in autocomplete.
+const currentChoiceLabel = "Current (active character)"
+
+// currentCardName is the special name option value that targets the guild's
+// active character.
+const currentCardName = "current"
+
+// currentThreadKey is the option value that targets the character's active
+// thread.
+const currentThreadKey = currentCardName
+
+// ErrCardNotFound is returned by resolveCard when no saved character matches.
+var ErrCardNotFound = errors.New("character not found")
+
+// cardAmbiguityMaxLines bounds the candidates listed in an ambiguity reply.
+const cardAmbiguityMaxLines = 10
+
 // Message component custom IDs.
 const (
-	setCharacterImageID = "select_char_image"
-	deleteConfirmPrefix = "delete_confirm_"
-	deleteCancelPrefix  = "delete_cancel_"
+	setCharacterImageID       = "select_char_image"
+	deleteConfirmPrefix       = "delete_confirm_"
+	deleteCancelPrefix        = "delete_cancel_"
+	deleteThreadConfirmPrefix = "delete_thread_confirm_"
+	deleteThreadCancelPrefix  = "delete_thread_cancel_"
 )
 
 // Embed text caps. Discord allows 4096 for the description and 1024 per field
@@ -56,15 +83,9 @@ func deleteConfirmID(characterID string) string { return deleteConfirmPrefix + c
 
 func deleteCancelID(characterID string) string { return deleteCancelPrefix + characterID }
 
-// currentCardName is the special name option value that targets the guild's
-// active character.
-const currentCardName = "current"
+func deleteThreadConfirmID(threadID string) string { return deleteThreadConfirmPrefix + threadID }
 
-// ErrCardNotFound is returned by resolveCard when no saved character matches.
-var ErrCardNotFound = errors.New("character not found")
-
-// cardAmbiguityMaxLines bounds the candidates listed in an ambiguity reply.
-const cardAmbiguityMaxLines = 10
+func deleteThreadCancelID(threadID string) string { return deleteThreadCancelPrefix + threadID }
 
 // CardAmbiguityError is returned by resolveCard when several saved characters
 // match the input.
@@ -101,6 +122,32 @@ func resolveActiveCard(ctx context.Context, sm *session.Manager, guildID string)
 		return nil, fmt.Errorf("failed to retrieve active character %q: %w", details.CharacterID, err)
 	}
 	return card, nil
+}
+
+// resolveThreadOption maps a /setthread or /deletethread option value to
+// one of the character's threads: when the "current" key is allowed it
+// targets the active thread, and anything else is an exact thread ID.
+// Returns nil when no thread matches.
+func resolveThreadOption(ctx context.Context, sm *session.Manager, guildID, characterID, value string, allowCurrent bool) *session.Thread {
+	switch {
+	case allowCurrent && strings.EqualFold(value, currentThreadKey):
+		threads, err := sm.ListThreads(ctx, guildID, characterID)
+		if err != nil {
+			return nil
+		}
+		for _, th := range threads {
+			if th.Active {
+				return th
+			}
+		}
+		return nil
+	default:
+		th, err := sm.GetThread(ctx, guildID, characterID, value)
+		if err != nil || th == nil {
+			return nil
+		}
+		return th
+	}
 }
 
 // resolveCard resolves a user-supplied name to a character card, trying in
@@ -190,16 +237,20 @@ func respondResolveError(ctx context.Context, s DiscordSession, i *discordgo.Int
 	}
 }
 
-// currentChoiceLabel is the display name of the current-character choice;
-// it is what users type to find it in autocomplete.
-const currentChoiceLabel = "Current (active character)"
+// activeChoiceSuffix marks the guild's active character in autocomplete
+// choices.
+const activeChoiceSuffix = " (active)"
 
+// currentChoice is the autocomplete entry that targets the guild's active
+// character without naming it.
 func currentChoice() *discordgo.ApplicationCommandOptionChoice {
 	return &discordgo.ApplicationCommandOptionChoice{Name: currentChoiceLabel, Value: currentCardName}
 }
 
 // autocompleteCharacters builds Discord autocomplete choices for the guild's
-// characters matching query.
+// characters matching query. The active character's entry is marked with
+// " (active)"; when includeCurrent is set, the "Current (active character)"
+// choice is offered first.
 func autocompleteCharacters(ctx context.Context, sm *session.Manager, guildID, query string, includeCurrent bool) []*discordgo.ApplicationCommandOptionChoice {
 	none := []*discordgo.ApplicationCommandOptionChoice{{Name: "No matching characters", Value: "none"}}
 	if includeCurrent {
@@ -209,6 +260,11 @@ func autocompleteCharacters(ctx context.Context, sm *session.Manager, guildID, q
 	cards, err := sm.GetGuildCharacters(ctx, guildID)
 	if err != nil || len(cards) == 0 {
 		return none
+	}
+
+	var activeID string
+	if details, err := sm.GetCharacterDetails(ctx, guildID); err == nil && details != nil {
+		activeID = details.CharacterID
 	}
 
 	query = strings.ToLower(query)
@@ -242,16 +298,80 @@ func autocompleteCharacters(ctx context.Context, sm *session.Manager, guildID, q
 		choices = append(choices, currentChoice())
 	}
 	for _, card := range matched {
+		name := cardChoiceName(card)
+		if card.CharacterID == activeID {
+			name = truncateToRuneLimit(name+activeChoiceSuffix, choiceNameLimit)
+		}
 		choices = append(choices, &discordgo.ApplicationCommandOptionChoice{
-			Name:  cardChoiceName(card),
+			Name:  name,
 			Value: card.CharacterID,
 		})
 	}
 	return choices
 }
 
-// choiceNameLimit is Discord's maximum length for an autocomplete choice name.
-const choiceNameLimit = 100
+func characterGreeting(description string) string {
+	greeting, ok := research.ExtractSection(description, research.SectionGreeting)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(greeting)
+}
+
+// autocompleteThreads builds Discord autocomplete choices for the active
+// character's threads matching query, most recently used first.
+func autocompleteThreads(ctx context.Context, sm *session.Manager, guildID, query string, includeCurrent bool) []*discordgo.ApplicationCommandOptionChoice {
+	none := []*discordgo.ApplicationCommandOptionChoice{{Name: "No active character", Value: "none"}}
+	details, err := sm.GetCharacterDetails(ctx, guildID)
+	if err != nil || details == nil || details.CharacterID == "" {
+		return none
+	}
+
+	threads, err := sm.ListThreads(ctx, guildID, details.CharacterID)
+	if err == nil && len(threads) == 0 {
+		// The character has not been promoted to the threads table yet
+		// (autocomplete can run before any command has), so promote it.
+		if perr := sm.EnsureDefaultThread(ctx, guildID, details.CharacterID); perr == nil {
+			threads, err = sm.ListThreads(ctx, guildID, details.CharacterID)
+		}
+	}
+	if err != nil || len(threads) == 0 {
+		return none
+	}
+
+	query = strings.ToLower(query)
+	includeCurrent = includeCurrent && strings.Contains(strings.ToLower(currentThreadChoiceLabel), query)
+
+	var prefix, partial []*session.Thread
+	for _, th := range threads {
+		switch {
+		case strings.HasPrefix(strings.ToLower(th.Name), query):
+			prefix = append(prefix, th)
+		case strings.Contains(strings.ToLower(th.Name), query):
+			partial = append(partial, th)
+		}
+	}
+	matched := append(prefix, partial...)
+	if len(matched) == 0 && !includeCurrent {
+		return none
+	}
+
+	choices := make([]*discordgo.ApplicationCommandOptionChoice, 0, len(matched)+1)
+	if includeCurrent {
+		choices = append(choices, &discordgo.ApplicationCommandOptionChoice{Name: currentThreadChoiceLabel, Value: currentThreadKey})
+	}
+	for _, th := range matched {
+		name := th.Name
+		if th.Active {
+			name += " (active)"
+		}
+		choices = append(choices, &discordgo.ApplicationCommandOptionChoice{
+			Name:  truncateToRuneLimit(name, choiceNameLimit),
+			Value: th.ThreadID,
+		})
+	}
+	return choices
+}
 
 // cardChoiceName renders an autocomplete choice label: display name, series,
 // and the character ID. The ID is guild-unique, so it is what tells apart

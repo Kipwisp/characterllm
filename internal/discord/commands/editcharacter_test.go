@@ -109,7 +109,7 @@ func TestEditCharacterCmd_SimpleSections(t *testing.T) {
 	// One section per invocation.
 	if err := cmd.Execute(context.Background(), s, newEditInteraction(guildID, "char1",
 		stringOption("section", "official_name"),
-		stringOption("instruction", "Miles G. Morales"),
+		stringOption("edit", "Miles G. Morales"),
 	)); err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestEditCharacterCmd_SimpleSections(t *testing.T) {
 	}
 	if err := cmd.Execute(context.Background(), s, newEditInteraction(guildID, "char1",
 		stringOption("section", "display_name"),
-		stringOption("instruction", "Miles"),
+		stringOption("edit", "Miles"),
 	)); err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestEditCharacterCmd_SimpleSections(t *testing.T) {
 	}
 	if err := cmd.Execute(context.Background(), s, newEditInteraction(guildID, "char1",
 		stringOption("section", "series"),
-		stringOption("instruction", "Spider-Verse"),
+		stringOption("edit", "Spider-Verse"),
 	)); err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
@@ -166,18 +166,18 @@ func TestEditCharacterCmd_SectionValidation(t *testing.T) {
 
 	cmd := &editCharacterCmd{session: sm, imageClient: cmdCtx.ImageClient, synthesizer: &mockSynthesizer{}, audit: cmdCtx.Audit}
 
-	// A section without an instruction is rejected.
+	// A section without an edit is rejected.
 	if err := cmd.Execute(context.Background(), s, newEditInteraction(guildID, "char1", stringOption("section", "series"))); err == nil {
-		t.Error("Expected error for section without instruction")
+		t.Error("Expected error for section without edit")
 	}
-	if !strings.Contains(capturedContent, "instruction") {
-		t.Errorf("Expected instruction guidance, got %q", capturedContent)
+	if !strings.Contains(capturedContent, "edit") {
+		t.Errorf("Expected edit guidance, got %q", capturedContent)
 	}
 
 	// An unknown section is rejected.
 	if err := cmd.Execute(context.Background(), s, newEditInteraction(guildID, "char1",
 		stringOption("section", "image"),
-		stringOption("instruction", "x"),
+		stringOption("edit", "x"),
 	)); err == nil {
 		t.Error("Expected error for unknown section")
 	}
@@ -233,7 +233,7 @@ func TestEditCharacterCmd_SectionRewrite(t *testing.T) {
 	cmd := &editCharacterCmd{session: sm, imageClient: cmdCtx.ImageClient, synthesizer: mockSynth, audit: cmdCtx.Audit}
 	err := cmd.Execute(context.Background(), s, newEditInteraction(guildID, "char1",
 		stringOption("section", "voice"),
-		stringOption("instruction", "make him sound warmer"),
+		stringOption("edit", "make him sound warmer"),
 	))
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
@@ -308,7 +308,7 @@ func TestEditCharacterCmd_SectionRewrite(t *testing.T) {
 			t.Errorf("section %s contaminated: %q", section, b)
 		}
 	}
-	// A section without an instruction is rejected before confirmation.
+	// A section without an edit is rejected before confirmation.
 	var missingContent string
 	s.InteractionRespondFn = func(interaction *discordgo.Interaction, response *discordgo.InteractionResponse) error {
 		if response.Data != nil {
@@ -317,10 +317,10 @@ func TestEditCharacterCmd_SectionRewrite(t *testing.T) {
 		return nil
 	}
 	if err := cmd.Execute(context.Background(), s, newEditInteraction(guildID, "char1", stringOption("section", "voice"))); err == nil {
-		t.Error("Expected error for section without instruction")
+		t.Error("Expected error for section without edit")
 	}
-	if !strings.Contains(missingContent, "instruction") {
-		t.Errorf("Expected instruction guidance, got %q", missingContent)
+	if !strings.Contains(missingContent, "edit") {
+		t.Errorf("Expected edit guidance, got %q", missingContent)
 	}
 }
 
@@ -365,7 +365,7 @@ func TestEditCharacterCmd_GreetingSection(t *testing.T) {
 	cmd := &editCharacterCmd{session: sm, imageClient: cmdCtx.ImageClient, synthesizer: mockSynth, audit: cmdCtx.Audit}
 	err := cmd.Execute(context.Background(), s, newEditInteraction(guildID, "char1",
 		stringOption("section", "greeting"),
-		stringOption("instruction", "make it more welcoming"),
+		stringOption("edit", "make it more welcoming"),
 	))
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
@@ -433,7 +433,7 @@ func TestEditCharacterCmd_ScenarioSection(t *testing.T) {
 	cmd := &editCharacterCmd{session: sm, imageClient: cmdCtx.ImageClient, synthesizer: mockSynth, audit: cmdCtx.Audit}
 	err := cmd.Execute(context.Background(), s, newEditInteraction(guildID, "char1",
 		stringOption("section", "scenario"),
-		stringOption("instruction", "move it to a rooftop"),
+		stringOption("edit", "move it to a rooftop"),
 	))
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
@@ -479,17 +479,17 @@ func TestEditCharacterCmd_MissingInput(t *testing.T) {
 	if err := cmd.Execute(context.Background(), s, newEditInteraction(guildID, "char1")); err == nil {
 		t.Error("Expected error when nothing is given")
 	}
-	if !strings.Contains(capturedContent, "section") || !strings.Contains(capturedContent, "instruction") {
+	if !strings.Contains(capturedContent, "section") || !strings.Contains(capturedContent, "edit") {
 		t.Errorf("Expected guidance message, got %q", capturedContent)
 	}
 
-	// A section without an instruction is rejected before the LLM is called.
+	// A section without an edit is rejected before the LLM is called.
 	capturedContent = ""
 	if err := cmd.Execute(context.Background(), s, newEditInteraction(guildID, "char1", stringOption("section", "voice"))); err == nil {
-		t.Error("Expected error for section without instruction")
+		t.Error("Expected error for section without edit")
 	}
-	if !strings.Contains(capturedContent, "instruction") {
-		t.Errorf("Expected instruction guidance, got %q", capturedContent)
+	if !strings.Contains(capturedContent, "edit") {
+		t.Errorf("Expected edit guidance, got %q", capturedContent)
 	}
 }
 
@@ -511,7 +511,7 @@ func TestEditCharacterCmd_CurrentKey(t *testing.T) {
 	}
 
 	cmd := &editCharacterCmd{session: cmdCtx.Session, imageClient: cmdCtx.ImageClient, synthesizer: &mockSynthesizer{}, audit: cmdCtx.Audit}
-	if err := cmd.Execute(context.Background(), s, newEditInteraction(guildID, "current", stringOption("section", "display_name"), stringOption("instruction", "Geralt"))); err != nil {
+	if err := cmd.Execute(context.Background(), s, newEditInteraction(guildID, "current", stringOption("section", "display_name"), stringOption("edit", "Geralt"))); err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
 	if !strings.Contains(capturedContent, "Updated **Geralt**") {
@@ -536,7 +536,7 @@ func TestEditCharacterCmd_CurrentKeyNoActive(t *testing.T) {
 	}
 
 	cmd := &editCharacterCmd{session: cmdCtx.Session, imageClient: cmdCtx.ImageClient, synthesizer: &mockSynthesizer{}, audit: cmdCtx.Audit}
-	if err := cmd.Execute(context.Background(), s, newEditInteraction("guild1", "current", stringOption("section", "display_name"), stringOption("instruction", "X"))); err != nil {
+	if err := cmd.Execute(context.Background(), s, newEditInteraction("guild1", "current", stringOption("section", "display_name"), stringOption("edit", "X"))); err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
 	if !ephemeral || !strings.Contains(capturedContent, "No saved character cards") {
@@ -599,7 +599,7 @@ func TestEditCharacterCmd_GeneralRewrite(t *testing.T) {
 	cmd := &editCharacterCmd{session: sm, imageClient: cmdCtx.ImageClient, synthesizer: mockSynth, audit: cmdCtx.Audit}
 	err := cmd.Execute(context.Background(), s, newEditInteraction(guildID, "char1",
 		stringOption("section", "general"),
-		stringOption("instruction", "he is always happy"),
+		stringOption("edit", "he is always happy"),
 	))
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
@@ -688,7 +688,7 @@ func TestEditCharacterCmd_GeneralRewriteFailure(t *testing.T) {
 	cmd := &editCharacterCmd{session: sm, imageClient: cmdCtx.ImageClient, synthesizer: mockSynth, audit: cmdCtx.Audit}
 	if err := cmd.Execute(context.Background(), s, newEditInteraction(guildID, "char1",
 		stringOption("section", "general"),
-		stringOption("instruction", "he is always happy"),
+		stringOption("edit", "he is always happy"),
 	)); err == nil {
 		t.Fatal("Expected error for failed whole-persona rewrite")
 	}
@@ -734,7 +734,7 @@ func TestEditCharacterCmd_EditReject(t *testing.T) {
 	cmd := &editCharacterCmd{session: sm, imageClient: cmdCtx.ImageClient, synthesizer: mockSynth, audit: cmdCtx.Audit}
 	if err := cmd.Execute(context.Background(), s, newEditInteraction(guildID, "char1",
 		stringOption("section", "voice"),
-		stringOption("instruction", "make him sound warmer"),
+		stringOption("edit", "make him sound warmer"),
 	)); err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
@@ -862,7 +862,7 @@ func TestEditCharacterCmd_GeneralRewrite_Overflow(t *testing.T) {
 	cmd := &editCharacterCmd{session: sm, imageClient: cmdCtx.ImageClient, synthesizer: mockSynth, audit: cmdCtx.Audit}
 	err := cmd.Execute(context.Background(), s, newEditInteraction(guildID, "char1",
 		stringOption("section", "general"),
-		stringOption("instruction", "rewrite everything"),
+		stringOption("edit", "rewrite everything"),
 	))
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)

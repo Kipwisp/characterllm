@@ -26,12 +26,13 @@ type CharacterCard struct {
 
 // CharacterDetails represents the active character persona for a guild.
 type CharacterDetails struct {
-	CharacterID  string
-	OfficialName string
-	DisplayName  string
-	Series       string
-	Description  string
-	ImageURL     string
+	CharacterID    string
+	OfficialName   string
+	DisplayName    string
+	Series         string
+	Description    string
+	ImageURL       string
+	ActiveThreadID string
 }
 
 // Manager handles the persistence and retrieval of character data and conversation history for Discord guilds.
@@ -116,6 +117,7 @@ func (m *Manager) DeleteCharacterCard(ctx context.Context, guildID, characterID 
 	for _, q := range []string{
 		"DELETE FROM chat_history WHERE guild_id = ? AND character_id = ?",
 		"DELETE FROM conversation_summaries WHERE guild_id = ? AND character_id = ?",
+		"DELETE FROM threads WHERE guild_id = ? AND character_id = ?",
 		"DELETE FROM character_cards WHERE guild_id = ? AND character_id = ?",
 	} {
 		if _, err := tx.Exec(q, guildID, characterID); err != nil {
@@ -188,6 +190,16 @@ func (m *Manager) initDB() error {
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			PRIMARY KEY (guild_id, character_id, thread_id)
 		);`,
+		`CREATE TABLE IF NOT EXISTS threads (
+			guild_id TEXT,
+			character_id TEXT,
+			thread_id TEXT,
+			name TEXT,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			last_used_seq INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (guild_id, character_id, thread_id),
+			UNIQUE (guild_id, character_id, name)
+		);`,
 	}
 
 	for _, q := range queries {
@@ -199,6 +211,17 @@ func (m *Manager) initDB() error {
 	_, err := m.db.Exec("CREATE INDEX IF NOT EXISTS idx_history_char ON chat_history(guild_id, character_id, thread_id);")
 	if err != nil {
 		return fmt.Errorf("failed to create character history index: %v", err)
+	}
+
+	var hasActiveThread bool
+	err = m.db.QueryRow("SELECT EXISTS(SELECT 1 FROM pragma_table_info('character_cards') WHERE name = 'active_thread_id')").Scan(&hasActiveThread)
+	if err != nil {
+		return fmt.Errorf("failed to inspect character_cards schema: %v", err)
+	}
+	if !hasActiveThread {
+		if _, err := m.db.Exec("ALTER TABLE character_cards ADD COLUMN active_thread_id TEXT"); err != nil {
+			return fmt.Errorf("failed to add active_thread_id to character_cards: %v", err)
+		}
 	}
 
 	return nil
@@ -247,25 +270,19 @@ func (m *Manager) GetHistory(ctx context.Context, guildID, threadID string, limi
 	return messages, nil
 }
 
-// GetLastMessageForCharacter returns the most recent message in the most
-// recently used thread for a character, and whether any history exists. A
-// query error is treated as no history so callers degrade gracefully.
-func (m *Manager) GetLastMessageForCharacter(ctx context.Context, guildID, characterID string) (string, bool) {
+// GetLastCharacterMessage returns the most recent message spoken by the
+// character (assistant) in its thread, and whether one exists. A query
+// error is treated as no history so callers degrade gracefully.
+func (m *Manager) GetLastCharacterMessage(ctx context.Context, guildID, characterID, threadID string) (string, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	var content string
 	err := m.db.QueryRowContext(ctx, `
 		SELECT content FROM chat_history
-		WHERE guild_id = ? AND character_id = ?
-		  AND thread_id = (
-			SELECT thread_id FROM chat_history
-			WHERE guild_id = ? AND character_id = ?
-			ORDER BY created_at DESC, id DESC
-			LIMIT 1
-		  )
+		WHERE guild_id = ? AND character_id = ? AND thread_id = ? AND role = 'assistant'
 		ORDER BY created_at DESC, id DESC
-		LIMIT 1`, guildID, characterID, guildID, characterID).Scan(&content)
+		LIMIT 1`, guildID, characterID, threadID).Scan(&content)
 	if err != nil {
 		return "", false
 	}
@@ -373,10 +390,10 @@ func (m *Manager) GetCharacterDetails(ctx context.Context, guildID string) (*Cha
 
 	var details CharacterDetails
 	err := m.db.QueryRow(`
-		SELECT s.active_character_id, COALESCE(c.official_name, ''), c.display_name, COALESCE(c.series, ''), c.description, COALESCE(c.image_url, '')
+		SELECT s.active_character_id, COALESCE(c.official_name, ''), c.display_name, COALESCE(c.series, ''), c.description, COALESCE(c.image_url, ''), COALESCE(c.active_thread_id, '')
 		FROM guild_config s
 		JOIN character_cards c ON s.active_character_id = c.character_id
-		WHERE s.guild_id = ?`, guildID).Scan(&details.CharacterID, &details.OfficialName, &details.DisplayName, &details.Series, &details.Description, &details.ImageURL)
+		WHERE s.guild_id = ?`, guildID).Scan(&details.CharacterID, &details.OfficialName, &details.DisplayName, &details.Series, &details.Description, &details.ImageURL, &details.ActiveThreadID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get character details for guild %s: %w", guildID, err)
 	}
@@ -422,16 +439,17 @@ func (m *Manager) GetHistoryCount(ctx context.Context, guildID, threadID string)
 	return count, nil
 }
 
-// CountCharacterThreads returns the number of distinct threads with chat
-// history stored for a single character.
+// CountCharacterThreads returns the number of threads a single character
+// has. Characters whose history predates the threads table report zero
+// until EnsureDefaultThread promotes it.
 func (m *Manager) CountCharacterThreads(ctx context.Context, guildID, characterID string) (int, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	var count int
-	err := m.db.QueryRow("SELECT COUNT(DISTINCT thread_id) FROM chat_history WHERE guild_id = ? AND character_id = ?", guildID, characterID).Scan(&count)
+	err := m.db.QueryRow("SELECT COUNT(*) FROM threads WHERE guild_id = ? AND character_id = ?", guildID, characterID).Scan(&count)
 	if err != nil {
-		return 0, fmt.Errorf("failed to count history for character %s in guild %s: %w", characterID, guildID, err)
+		return 0, fmt.Errorf("failed to count threads for character %s in guild %s: %w", characterID, guildID, err)
 	}
 	return count, nil
 }

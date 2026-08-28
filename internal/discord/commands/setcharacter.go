@@ -70,10 +70,14 @@ func (c *setCharacterCmd) Execute(ctx context.Context, s DiscordSession, i *disc
 }
 
 // characterSwitchMessage builds the message shown when a character is
-// activated: the character's last line from its most recent thread, falling
-// back to its greeting, then to the boilerplate confirmation.
+// activated: the character's last line in its active thread, falling back
+// to its greeting, then to the boilerplate confirmation.
 func (c *setCharacterCmd) characterSwitchMessage(ctx context.Context, guildID string, card *session.CharacterCard) string {
-	if last, ok := c.session.GetLastMessageForCharacter(ctx, guildID, card.CharacterID); ok {
+	if err := c.session.EnsureDefaultThread(ctx, guildID, card.CharacterID); err != nil {
+		logger.FromContext(ctx).Warn("failed to ensure default thread", "error", err, "guild_id", guildID)
+	}
+	threadID, _ := c.session.GetActiveThreadID(ctx, guildID, card.CharacterID)
+	if last, ok := c.session.GetLastCharacterMessage(ctx, guildID, card.CharacterID, threadID); ok {
 		return last
 	}
 	if greeting, ok := research.ExtractSection(card.Description, research.SectionGreeting); ok && strings.TrimSpace(greeting) != "" {

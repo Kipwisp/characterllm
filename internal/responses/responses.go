@@ -93,7 +93,7 @@ var (
 		Expired         string
 		Error           string
 	}{
-		MissingInput:    "Provide a `section` and an `instruction` — the new value for a name/series field, or what to change in the persona section.",
+		MissingInput:    "Provide a `section` and an `edit` — the new value for a name/series field, or what to change in the persona section.",
 		SectionNotFound: "Section %s is not editable.",
 		Rewriting:       "Rewriting **%s** — %s…",
 		ProposalFailed:  "Sorry, I couldn't generate the edit proposal. Please try again.",
@@ -120,12 +120,50 @@ var (
 		AvatarError:   "The image was saved, but Discord rejected the avatar update.",
 	}
 
-	ResetChat = struct {
+	ClearThread = struct {
 		Success string
 		Error   string
 	}{
-		Success: "Chat history reset successfully.",
-		Error:   "Sorry, I couldn't reset the chat history.",
+		Success: "Thread cleared.",
+		Error:   "Sorry, I couldn't clear the thread.",
+	}
+
+	NewThread = struct {
+		Success   string
+		Duplicate string
+		Error     string
+	}{
+		Success:   "Created thread **%s** — now active.",
+		Duplicate: "The active character already has a thread named **%s**.",
+		Error:     "Sorry, I couldn't create the thread.",
+	}
+
+	SetThread = struct {
+		Success  string
+		NotFound string
+		Error    string
+	}{
+		Success:  "Now chatting in **%s**.",
+		NotFound: "That thread doesn't exist for the active character.",
+		Error:    "Sorry, I couldn't switch threads.",
+	}
+
+	DeleteThread = struct {
+		ConfirmDelete string
+		ConfirmClear  string
+		Deleted       string
+		Cleared       string
+		Cancelled     string
+		NotFound      string
+		Error         string
+	}{
+		ConfirmDelete: "This permanently deletes thread **%s** and its conversation. This cannot be undone.",
+		ConfirmClear:  "Thread **%s** is the only thread for **%s** — this clears its conversation but keeps the thread.",
+		Deleted:       "Deleted thread **%s**.",
+		Cleared:       "Cleared the conversation in **%s**.",
+		Cancelled:     "Thread deletion cancelled.",
+		NotFound:      "That thread no longer exists.",
+		Error:         "Sorry, I couldn't delete the thread.",
 	}
 
 	General = struct {

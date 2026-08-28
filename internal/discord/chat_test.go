@@ -263,7 +263,7 @@ func TestHandleMessageCreate_ImageNotesStrippedAndPersisted(t *testing.T) {
 		t.Errorf("expected image note stripped from the sent message, got %q", sentContent)
 	}
 
-	history, err := sm.GetHistory(ctx, guildID, "", 10, 0)
+	history, err := sm.GetHistory(ctx, guildID, "1", 10, 0)
 	if err != nil {
 		t.Fatalf("GetHistory failed: %v", err)
 	}
@@ -734,7 +734,7 @@ func TestHandleMessageCreate_SerializesSameConversation(t *testing.T) {
 		t.Error("second turn's prompt is missing the first turn's assistant reply")
 	}
 
-	history, err := sm.GetHistory(ctx, guildID, "", 100, 0)
+	history, err := sm.GetHistory(ctx, guildID, "1", 100, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -858,7 +858,7 @@ func TestCompaction_TriggeredThroughHandler(t *testing.T) {
 	}
 
 	for i := 0; i < 10; i++ {
-		sm.SaveMessage(ctx, guildID, "", "user", "Msg")
+		sm.SaveMessage(ctx, guildID, "1", "user", "Msg")
 	}
 
 	compactionCalls := 0
@@ -890,7 +890,7 @@ func TestCompaction_TriggeredThroughHandler(t *testing.T) {
 	if compactionCalls != 1 {
 		t.Errorf("Expected exactly 1 compaction generation call, got %d", compactionCalls)
 	}
-	summary, err := sm.GetSummary(ctx, guildID, "")
+	summary, err := sm.GetSummary(ctx, guildID, "1")
 	if err != nil {
 		t.Fatalf("GetSummary failed: %v", err)
 	}

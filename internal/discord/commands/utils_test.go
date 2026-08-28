@@ -242,20 +242,73 @@ func TestAutocompleteCharacters(t *testing.T) {
 	sm.SaveCharacterCard(ctx, guildID, &session.CharacterCard{CharacterID: "c3", DisplayName: "Peter Parker"})
 
 	t.Run("Empty query lists characters with ID values", func(t *testing.T) {
+		choices := autocompleteCharacters(ctx, sm, guildID, "", false)
+		if len(choices) != 3 {
+			t.Fatalf("expected 3 card choices, got %d", len(choices))
+		}
+		if choices[0].Value != "c1" || choices[0].Name != "Miles Morales c1" {
+			t.Errorf("unexpected first choice: %+v", choices[0])
+		}
+	})
+
+	t.Run("Active character is marked", func(t *testing.T) {
+		if err := sm.SetActiveCharacter(ctx, guildID, "c3"); err != nil {
+			t.Fatalf("SetActiveCharacter failed: %v", err)
+		}
+		choices := autocompleteCharacters(ctx, sm, guildID, "", false)
+		for _, c := range choices {
+			switch c.Value {
+			case "c3":
+				if c.Name != "Peter Parker c3 (active)" {
+					t.Errorf("expected the active marker on Peter Parker, got %+v", c)
+				}
+			default:
+				if strings.HasSuffix(c.Name, " (active)") {
+					t.Errorf("unexpected active marker on %+v", c)
+				}
+				if c.Value == currentCardName {
+					t.Errorf("unexpected current suggestion: %+v", c)
+				}
+			}
+		}
+	})
+
+	t.Run("Current choice is offered when requested", func(t *testing.T) {
 		choices := autocompleteCharacters(ctx, sm, guildID, "", true)
 		if len(choices) != 4 {
 			t.Fatalf("expected 4 choices (current + 3 cards), got %d", len(choices))
 		}
-		if choices[0].Value != currentCardName {
-			t.Errorf("expected current suggestion first, got %+v", choices[0])
+		if choices[0].Value != currentCardName || choices[0].Name != currentChoiceLabel {
+			t.Errorf("expected the current choice first, got %+v", choices[0])
 		}
-		if choices[1].Value != "c1" || choices[1].Name != "Miles Morales c1" {
-			t.Errorf("unexpected second choice: %+v", choices[1])
+		marked := false
+		for _, c := range choices {
+			if c.Value == "c3" && c.Name == "Peter Parker c3 (active)" {
+				marked = true
+			}
+		}
+		if !marked {
+			t.Errorf("expected the active marker to survive alongside the current choice, got %v", choices)
+		}
+	})
+
+	t.Run("Current choice follows the query", func(t *testing.T) {
+		// The label matches, no card does: current plus the placeholder.
+		choices := autocompleteCharacters(ctx, sm, guildID, "current", true)
+		if len(choices) != 2 || choices[0].Value != currentCardName || choices[1].Value != "none" {
+			t.Errorf("expected current and placeholder for 'current', got %v", choices)
+		}
+		// The label no longer matches: cards only.
+		choices = autocompleteCharacters(ctx, sm, guildID, "mor", true)
+		for _, c := range choices {
+			if c.Value == currentCardName {
+				t.Errorf("unexpected current suggestion for 'mor': %+v", c)
+			}
 		}
 	})
 
 	t.Run("Prefix preferred over substring", func(t *testing.T) {
-		choices := autocompleteCharacters(ctx, sm, guildID, "mor", true)
+		choices := autocompleteCharacters(ctx, sm, guildID, "mor", false)
 		if len(choices) != 2 {
 			t.Fatalf("expected 2 choices, got %d", len(choices))
 		}
@@ -267,15 +320,14 @@ func TestAutocompleteCharacters(t *testing.T) {
 	t.Run("Series name matches", func(t *testing.T) {
 		sm.SaveCharacterCard(ctx, guildID, &session.CharacterCard{CharacterID: "c4", DisplayName: "Tank", Series: "Rick and Morty"})
 
-		// Prefix match on the series (queries not in the current
-		// suggestion's label suppress it, so Tank is the only choice).
-		choices := autocompleteCharacters(ctx, sm, guildID, "rick", true)
+		// Prefix match on the series.
+		choices := autocompleteCharacters(ctx, sm, guildID, "rick", false)
 		if len(choices) != 1 || choices[0].Value != "c4" {
 			t.Errorf("expected Tank for 'rick', got %+v", choices)
 		}
 
 		// Substring match on the series.
-		choices = autocompleteCharacters(ctx, sm, guildID, "morty", true)
+		choices = autocompleteCharacters(ctx, sm, guildID, "morty", false)
 		if len(choices) != 1 || choices[0].Value != "c4" {
 			t.Errorf("expected Tank for 'morty', got %+v", choices)
 		}
@@ -283,51 +335,27 @@ func TestAutocompleteCharacters(t *testing.T) {
 
 	t.Run("Character ID matches", func(t *testing.T) {
 		// The ID is what tells apart same-named cards, so it must be searchable.
-		choices := autocompleteCharacters(ctx, sm, guildID, "c4", true)
+		choices := autocompleteCharacters(ctx, sm, guildID, "c4", false)
 		if len(choices) != 1 || choices[0].Value != "c4" {
 			t.Errorf("expected Tank for ID query 'c4', got %+v", choices)
 		}
-		choices = autocompleteCharacters(ctx, sm, guildID, "4", true)
+		choices = autocompleteCharacters(ctx, sm, guildID, "4", false)
 		if len(choices) != 1 || choices[0].Value != "c4" {
 			t.Errorf("expected Tank for ID substring '4', got %+v", choices)
 		}
 	})
 
-	t.Run("Current suggestion matches its label partially", func(t *testing.T) {
-		// Typing part of "Current (active character)" keeps the suggestion
-		// visible, not just the exact "current" or an empty query.
-		for _, q := range []string{"cur", "act", "e"} {
-			choices := autocompleteCharacters(ctx, sm, guildID, q, true)
-			if len(choices) == 0 || choices[0].Value != currentCardName {
-				t.Errorf("query %q: expected current suggestion first, got %+v", q, choices)
-				continue
-			}
+	t.Run("No matches returns the placeholder", func(t *testing.T) {
+		choices := autocompleteCharacters(ctx, sm, guildID, "zzz", false)
+		if len(choices) != 1 || choices[0].Value != "none" {
+			t.Errorf("expected placeholder choice only, got %v", choices)
 		}
 	})
 
-	t.Run("No matches returns current and placeholder", func(t *testing.T) {
-		choices := autocompleteCharacters(ctx, sm, guildID, "zzz", true)
-		if len(choices) != 2 || choices[0].Value != currentCardName || choices[1].Value != "none" {
-			t.Errorf("expected current + placeholder, got %v", choices)
-		}
-	})
-
-	t.Run("No current suggestion when disabled", func(t *testing.T) {
-		choices := autocompleteCharacters(ctx, sm, guildID, "", false)
-		if len(choices) != 4 {
-			t.Fatalf("expected 4 card choices without current, got %d", len(choices))
-		}
-		for _, c := range choices {
-			if c.Value == currentCardName {
-				t.Errorf("unexpected current suggestion: %+v", c)
-			}
-		}
-	})
-
-	t.Run("Empty guild returns current and placeholder", func(t *testing.T) {
-		choices := autocompleteCharacters(ctx, sm, "otherguild", "", true)
-		if len(choices) != 2 || choices[0].Value != currentCardName || choices[1].Value != "none" {
-			t.Errorf("expected current + placeholder, got %v", choices)
+	t.Run("Empty guild returns the placeholder", func(t *testing.T) {
+		choices := autocompleteCharacters(ctx, sm, "otherguild", "", false)
+		if len(choices) != 1 || choices[0].Value != "none" {
+			t.Errorf("expected placeholder choice only, got %v", choices)
 		}
 	})
 }
