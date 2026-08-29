@@ -34,7 +34,7 @@ Only **SearXNG** is supported (`SEARCH_PROVIDER=searxng`) currently, configured 
 ### 1. Clone and configure
 
 ```sh
-git clone <repo-url> characterllm
+git clone https://github.com/Kipwisp/characterllm.git
 cd characterllm
 ```
 
