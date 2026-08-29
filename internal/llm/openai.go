@@ -14,10 +14,29 @@ import (
 	"characterllm/internal/logger"
 )
 
-// tokensPerImage is the rough token cost of a single attached image. Images
-// are downscaled to a 512px box before sending, which lands in the low
-// hundreds of tokens for common vision models.
-const tokensPerImage = 500
+// DefaultImageTokenEstimate is the rough token cost of a single attached
+// image at the default 512px long edge.
+const DefaultImageTokenEstimate = 500
+
+// minImageTokenEstimate floors the derived per-image estimate: vision models
+// charge a minimum tile cost even for small images.
+const minImageTokenEstimate = 150
+
+// ImageTokenEstimateFor derives the fallback per-image token estimate from
+// the configured max image edge. Cost scales with pixel area, so the default
+// (tuned for a 512px edge) scales by (edge/512)^2, floored at
+// minImageTokenEstimate. A non-positive edge is a configuration error.
+func ImageTokenEstimateFor(maxEdge int) (int, error) {
+	if maxEdge <= 0 {
+		return 0, fmt.Errorf("max image edge must be positive, got %d", maxEdge)
+	}
+	const refEdge = 512
+	est := DefaultImageTokenEstimate * maxEdge * maxEdge / (refEdge * refEdge)
+	if est < minImageTokenEstimate {
+		return minImageTokenEstimate, nil
+	}
+	return est, nil
+}
 
 // llamaMessage is the OpenAI JSON form of a single turn in LlamaRequest/LlamaResponse. Its
 // content is either a plain JSON string or an array of content parts (a text
@@ -101,7 +120,10 @@ type llamaChoice struct {
 
 // OpenAIClient handles communication with an OpenAI-compatible LLM server (e.g., llama.cpp).
 type OpenAIClient struct {
-	URL                   string
+	URL string
+	// ImageTokenEstimate overrides the per-image cost in the token-count
+	// fallback heuristic; zero uses DefaultImageTokenEstimate.
+	ImageTokenEstimate    int
 	client                *http.Client
 	tokenizationSupported bool
 	tokenizationTested    bool
@@ -171,7 +193,14 @@ func (c *OpenAIClient) EstimateTokens(ctx context.Context, messages []Message) i
 			totalChars += len(msg.Reasoning)
 		}
 	}
-	return totalChars/4 + tokensPerImage*countImages(messages)
+	return totalChars/4 + c.imageTokenEstimate()*countImages(messages)
+}
+
+func (c *OpenAIClient) imageTokenEstimate() int {
+	if c.ImageTokenEstimate > 0 {
+		return c.ImageTokenEstimate
+	}
+	return DefaultImageTokenEstimate
 }
 
 func countImages(messages []Message) int {

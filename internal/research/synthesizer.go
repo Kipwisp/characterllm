@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"characterllm/internal/config"
 	"characterllm/internal/llm"
 	"characterllm/internal/logger"
 	"characterllm/internal/prompts"
+	"characterllm/internal/scrape"
 	"characterllm/internal/search"
 )
 
@@ -52,10 +54,25 @@ type SynthesisResult struct {
 	Status       SynthesisStatus
 	Ambiguities  []string
 	ResearchData string
-	// AvatarChoice is the 1-based position of the candidate image the model
-	// picked as the character's avatar (0 = no pick). Only set when the
-	// synthesis call was made with candidate images.
+	// SynthesisPrompt is the verbatim rendered synthesis prompt sent to the
+	// model, kept for audit logging.
+	SynthesisPrompt string
+	// AvatarChoice is the 1-based position within AvatarKept of the candidate
+	// the model picked as the character's avatar (0 = no pick). Only set when
+	// the call was made with candidate images.
 	AvatarChoice int
+	// AvatarKept holds the 1-based positions of the original candidates that
+	// the source-select call judged to actually depict the character, in
+	// original order. nil = no filtering was performed (no candidates shown);
+	// an empty slice = candidates were shown but none passed the filter.
+	AvatarKept []int
+	// SelectPrompt, SelectResponse, SelectReasoning, and SelectLatency are
+	// the source-select exchange, kept for audit logging. SelectPrompt is
+	// empty when no search results were returned (no call was made).
+	SelectPrompt    string
+	SelectResponse  string
+	SelectReasoning string
+	SelectLatency   time.Duration
 	// RawResponse is the model's unprocessed output, kept for audit logging.
 	RawResponse string
 }
@@ -98,13 +115,7 @@ type SectionRewriteResult struct {
 // Synthesizer defines the interface for analyzing user input and synthesizing character personas.
 type Synthesizer interface {
 	AnalyzeInput(ctx context.Context, input string) (*AnalysisResult, string, string, error)
-	// FetchCharacter researches and synthesizes the persona. imageURIs are
-	// data URIs of images shown to the model; candidateCount is how many
-	// avatar candidates the model can choose from (the images may tile
-	// several candidates into one picture). The model may pick one via the
-	// AvatarChoice in the result; empty imageURIs means the synthesis runs
-	// without images and no pick.
-	FetchCharacter(ctx context.Context, analysis *AnalysisResult, imageURIs []string, candidateCount int) (*SynthesisResult, error)
+	FetchCharacter(ctx context.Context, analysis *AnalysisResult, avatarDataURIs []string) (*SynthesisResult, error)
 	RewriteSection(ctx context.Context, req SectionRewriteRequest) (*SectionRewriteResult, error)
 }
 
@@ -114,15 +125,19 @@ type SynthesizerClient struct {
 	llmClient      llm.LLMClient
 	config         *config.Config
 	prompts        *prompts.Set
+	// scraper fetches the picked source page; nil disables scraping and the
+	// source block always falls back to title and description.
+	scraper scrape.ScrapeSource
 }
 
 // NewSynthesizer creates a new character synthesizer.
-func NewSynthesizer(sp search.SearchProvider, llm llm.LLMClient, cfg *config.Config, ps *prompts.Set) Synthesizer {
+func NewSynthesizer(sp search.SearchProvider, llm llm.LLMClient, cfg *config.Config, ps *prompts.Set, scraper scrape.ScrapeSource) Synthesizer {
 	return &SynthesizerClient{
 		searchProvider: sp,
 		llmClient:      llm,
 		config:         cfg,
 		prompts:        ps,
+		scraper:        scraper,
 	}
 }
 
@@ -165,7 +180,7 @@ func (s *SynthesizerClient) AnalyzeInput(ctx context.Context, input string) (*An
 }
 
 // FetchCharacter performs a web search and uses an LLM to synthesize a structured character profile.
-func (s *SynthesizerClient) FetchCharacter(ctx context.Context, analysis *AnalysisResult, imageURIs []string, candidateCount int) (*SynthesisResult, error) {
+func (s *SynthesizerClient) FetchCharacter(ctx context.Context, analysis *AnalysisResult, avatarDataURIs []string) (*SynthesisResult, error) {
 	logger.FromContext(ctx).Info("beginning character research", "target", analysis.OfficialName)
 
 	// Research: Search for the canonical character
@@ -182,14 +197,74 @@ func (s *SynthesizerClient) FetchCharacter(ctx context.Context, analysis *Analys
 		return &SynthesisResult{Status: SynthesisStatusUnknown}, nil
 	}
 
-	// Build the Research Dossier
-	var dossier strings.Builder
-	for i, res := range results {
-		fmt.Fprintf(&dossier, "\n--- Result %d ---\nTitle: %s\nURL: %s\nSnippet: %s\n", i+1, res.Title, res.URL, res.Snippet)
+	// Source: pick the best result (and, when candidate photos are attached,
+	// filter out the ones that do not depict the character), then render the
+	// single source block (falling back down the chain when the scrape is not
+	// possible).
+	sel := s.selectSource(ctx, analysis, results, avatarDataURIs)
+	sourceBlock := s.buildSourceBlock(ctx, analysis, sel.picked)
+
+	// The synthesis only sees the candidates that passed the filter,
+	// renumbered 1..K in their original order.
+	keptURIs := avatarDataURIs
+	if sel.kept != nil {
+		filtered := make([]string, 0, len(sel.kept))
+		for _, pos := range sel.kept {
+			filtered = append(filtered, avatarDataURIs[pos-1])
+		}
+		keptURIs = filtered
 	}
+	candidateCount := len(keptURIs)
 
 	// Synthesis: Use LLM to create the profile
-	prompt := strings.Replace(s.prompts.Synthesis, "{{RESULTS}}", dossier.String(), 1)
+	prompt := s.renderSynthesisPrompt(analysis, sourceBlock, keptURIs, candidateCount)
+
+	messages := []llm.Message{
+		{Role: "user", Content: prompt, Images: keptURIs},
+	}
+
+	for attempt := 1; attempt <= s.config.LLM.MaxRetries; attempt++ {
+		logger.FromContext(ctx).Info("sending research dossier to LLM for synthesis", "modifiers", analysis.Modifiers, "attempt", attempt)
+		profile, reasoning, err := s.llmClient.GenerateResponse(ctx, messages, s.config.LLM.Model)
+		if err != nil {
+			return nil, fmt.Errorf("synthesis failed: %w", err)
+		}
+
+		res := s.parseSynthesis(profile, analysis.Scenario)
+		if candidateCount == 0 || res.AvatarChoice < 1 || res.AvatarChoice > candidateCount {
+			res.AvatarChoice = 0
+		}
+
+		// If status is OK or explicitly marked as failure (UNKNOWN/AMBIGUOUS), accept it.
+		// If status is UNKNOWN but it didn't start with "STATUS:", it's a formatting error (missing headers).
+		if res.Status == SynthesisStatusOK || strings.HasPrefix(profile, "STATUS:") {
+			res.Reasoning = reasoning
+			res.ResearchData = sourceBlock
+			res.SynthesisPrompt = prompt
+			res.AvatarKept = sel.kept
+			res.RawResponse = profile
+			res.SelectPrompt = sel.prompt
+			res.SelectResponse = sel.response
+			res.SelectReasoning = sel.reasoning
+			res.SelectLatency = sel.latency
+			return res, nil
+		}
+
+		if attempt < s.config.LLM.MaxRetries {
+			logger.FromContext(ctx).Warn("synthesis response missing required headers, retrying", "attempt", attempt)
+			messages = append(messages, llm.Message{Role: "assistant", Content: profile})
+			messages = append(messages, llm.Message{Role: "user", Content: "Your response is missing the required '### Identity & Temperament' section. Please ensure you follow the Output Structure exactly."})
+			continue
+		}
+	}
+
+	return nil, fmt.Errorf("synthesis failed to produce valid output after maximum retries")
+}
+
+// renderSynthesisPrompt fills the synthesis template's placeholders. sourceBlock
+// is the single source block for {{RESULTS}}.
+func (s *SynthesizerClient) renderSynthesisPrompt(analysis *AnalysisResult, sourceBlock string, imageURIs []string, candidateCount int) string {
+	prompt := strings.Replace(s.prompts.Synthesis, "{{RESULTS}}", sourceBlock, 1)
 
 	modifiersBlock := ""
 	if len(analysis.Modifiers) > 0 {
@@ -210,46 +285,240 @@ func (s *SynthesizerClient) FetchCharacter(ctx context.Context, analysis *Analys
 	}
 	prompt = strings.Replace(prompt, "{{AVATAR_BLOCK}}", avatarBlock, 1)
 
-	messages := []llm.Message{
-		{Role: "user", Content: prompt, Images: imageURIs},
+	return prompt
+}
+
+// buildSourceBlock renders the single source block the synthesis prompt sees
+// for the picked result: scraped page → picked result's title and description
+// → no-sources note.
+func (s *SynthesizerClient) buildSourceBlock(ctx context.Context, analysis *AnalysisResult, picked *search.SearchResult) string {
+	if picked == nil {
+		return noSourcesNote
 	}
+	if s.scraper != nil {
+		logger.FromContext(ctx).Info("scraping selected source", "url", picked.URL)
+		if src, err := s.scraper.Scrape(ctx, picked.URL); err == nil {
+			fixedCost := s.renderSynthesisPrompt(analysis, "", nil, 0)
+			maxChars := s.scrapeTokenBudget(fixedCost) * charsPerToken
+			return fmt.Sprintf("Source page: %s\nTitle: %s\n\nPage content:\n%s", picked.URL, src.Title, truncateToParagraphs(src.Text, maxChars))
+		} else {
+			logger.FromContext(ctx).Warn("scrape failed, falling back to title and description", "url", picked.URL, "error", err)
+		}
+	}
+	if picked.Title != "" || picked.Snippet != "" {
+		return fmt.Sprintf("Source (page unavailable; title and search description only):\nTitle: %s\nDescription: %s", picked.Title, picked.Snippet)
+	}
+	return noSourcesNote
+}
 
+// noSourcesNote is the {{RESULTS}} value when no usable source content could
+// be pulled for the character.
+const noSourcesNote = `No sources could be pulled for this character: no search page could be selected or read. Make your best effort from the character's name, series, and any modifiers above, drawing on your own knowledge. Keep details general and plausible.`
+
+// sourceSelection carries the outcome of the source-select call plus the
+// rendered prompt and final raw exchange, kept for audit logging.
+type sourceSelection struct {
+	picked    *search.SearchResult // nil when none picked or the reply stayed malformed
+	kept      []int                // nil = no avatar filtering ran, empty = none kept
+	prompt    string
+	response  string
+	reasoning string
+	latency   time.Duration
+}
+
+// selectSource asks the model to pick the single best search result for the
+// character. When candidate avatar photos are attached (vision models only),
+// the same call also filters them: the model lists the 1-based positions that
+// actually depict the character.
+func (s *SynthesizerClient) selectSource(ctx context.Context, analysis *AnalysisResult, results []search.SearchResult, avatarDataURIs []string) sourceSelection {
+	start := time.Now()
+	characterBlock := "Character: " + analysis.OfficialName
+	if analysis.Series != "" {
+		characterBlock += " (series: " + analysis.Series + ")"
+	}
+	var resultsBlock strings.Builder
+	for i, r := range results {
+		fmt.Fprintf(&resultsBlock, "%d. Title: %s\n   URL: %s\n   Snippet: %s\n", i+1, r.Title, r.URL, r.Snippet)
+	}
+	prompt := strings.Replace(s.prompts.SourceSelect, "{{CHARACTER_BLOCK}}", characterBlock, 1)
+	prompt = strings.Replace(prompt, "{{RESULTS}}", resultsBlock.String(), 1)
+	prompt = strings.Replace(prompt, "{{AVATAR_BLOCK}}", s.avatarFilterBlock(len(avatarDataURIs)), 1)
+
+	sel := sourceSelection{prompt: prompt}
+	messages := []llm.Message{{Role: "user", Content: prompt, Images: avatarDataURIs}}
 	for attempt := 1; attempt <= s.config.LLM.MaxRetries; attempt++ {
-		logger.FromContext(ctx).Info("sending research dossier to LLM for synthesis", "modifiers", analysis.Modifiers, "attempt", attempt)
-		profile, reasoning, err := s.llmClient.GenerateResponse(ctx, messages, s.config.LLM.Model)
+		response, reasoning, err := s.llmClient.GenerateResponse(ctx, messages, s.config.LLM.Model)
 		if err != nil {
-			return nil, fmt.Errorf("synthesis failed: %w", err)
+			logger.FromContext(ctx).Warn("source selection failed", "error", err)
+			sel.latency = time.Since(start)
+			return sel
 		}
-
-		res := s.parseSynthesis(profile, analysis.Scenario)
-		if len(imageURIs) == 0 || res.AvatarChoice < 1 || res.AvatarChoice > candidateCount {
-			res.AvatarChoice = 0
+		sel.response = response
+		sel.reasoning = reasoning
+		if idx, ok := parsePick(response, len(results)); ok {
+			if idx == -1 {
+				logger.FromContext(ctx).Info("source selection: no usable result picked")
+			} else {
+				logger.FromContext(ctx).Info("selected source", "url", results[idx].URL)
+				sel.picked = &results[idx]
+			}
+			sel.kept = s.parseKeptAvatars(ctx, response, avatarDataURIs)
+			sel.latency = time.Since(start)
+			return sel
 		}
-
-		// If status is OK or explicitly marked as failure (UNKNOWN/AMBIGUOUS), accept it.
-		// If status is UNKNOWN but it didn't start with "STATUS:", it's a formatting error (missing headers).
-		if res.Status == SynthesisStatusOK || strings.HasPrefix(profile, "STATUS:") {
-			res.Reasoning = reasoning
-			res.ResearchData = dossier.String()
-			res.RawResponse = profile
-			return res, nil
-		}
-
 		if attempt < s.config.LLM.MaxRetries {
-			logger.FromContext(ctx).Warn("synthesis response missing required headers, retrying", "attempt", attempt)
-			messages = append(messages, llm.Message{Role: "assistant", Content: profile})
-			messages = append(messages, llm.Message{Role: "user", Content: "Your response is missing the required '### Identity & Temperament' section. Please ensure you follow the Output Structure exactly."})
+			logger.FromContext(ctx).Warn("source selection reply malformed, retrying", "attempt", attempt)
+			messages = append(messages, llm.Message{Role: "assistant", Content: response})
+			correction := "Your reply was not a valid PICK line. Reply with exactly one line: PICK: n (the candidate number) or PICK: none."
+			if len(avatarDataURIs) > 0 {
+				correction += " Additionally, list the attached photos that depict the character on a second line: AVATARS: n,m,... or AVATARS: none."
+			}
+			messages = append(messages, llm.Message{Role: "user", Content: correction})
 			continue
 		}
 	}
+	sel.latency = time.Since(start)
+	return sel
+}
 
-	return nil, fmt.Errorf("synthesis failed to produce valid output after maximum retries")
+// parseKeptAvatars extracts the avatar filter from a select-source reply. It
+// returns the kept 1-based candidate positions, or nil when no filtering was
+// performed: no candidates were attached, or the model omitted the AVATARS
+// line (keeping everything is the safe fallback). An explicit
+// "AVATARS: none" yields an empty, non-nil slice.
+func (s *SynthesizerClient) parseKeptAvatars(ctx context.Context, output string, avatarDataURIs []string) []int {
+	if len(avatarDataURIs) == 0 {
+		return nil
+	}
+	kept, filtered := parseAvatarKept(output, len(avatarDataURIs))
+	if !filtered {
+		logger.FromContext(ctx).Warn("no AVATARS line in source select output; keeping all candidates")
+		return nil
+	}
+	logger.FromContext(ctx).Info("avatar pre-filter", "kept", kept, "of", len(avatarDataURIs))
+	return kept
+}
+
+// parseAvatarKept extracts the AVATARS line from a select-source reply. It
+// returns the kept 1-based positions (deduplicated, original order) and
+// whether an AVATARS line was present at all.
+func parseAvatarKept(output string, max int) ([]int, bool) {
+	for _, line := range strings.Split(output, "\n") {
+		trimmed := strings.TrimSpace(line)
+		upper := strings.ToUpper(trimmed)
+		if !strings.HasPrefix(upper, "AVATARS:") {
+			continue
+		}
+		val := strings.TrimSpace(trimmed[len("AVATARS:"):])
+		if strings.EqualFold(val, "none") {
+			return []int{}, true
+		}
+		seen := make(map[int]bool)
+		var kept []int
+		for _, part := range strings.Split(val, ",") {
+			n, err := strconv.Atoi(strings.TrimSpace(part))
+			if err != nil || n < 1 || n > max || seen[n] {
+				continue
+			}
+			seen[n] = true
+			kept = append(kept, n)
+		}
+		if kept == nil {
+			kept = []int{}
+		}
+		return kept, true
+	}
+	return nil, false
+}
+
+// avatarFilterBlock is the source-select prompt block shown when candidate
+// avatar photos are attached; it instructs the model to filter out images
+// that do not depict the character.
+const avatarFilterBlock = `
+### Avatar Candidates
+The attached images are %d candidate photos of this character, numbered 1 to %d in the order they are attached.
+Some may not depict the character at all: a different person, a logo, a screenshot, or an unrelated picture.
+In addition to the PICK line, output exactly one more line:
+AVATARS: n,m,...  (the 1-based numbers of the images that clearly depict the character, in order)
+or
+AVATARS: none   (if no image clearly depicts the character)`
+
+func (s *SynthesizerClient) avatarFilterBlock(count int) string {
+	if count == 0 {
+		return ""
+	}
+	return fmt.Sprintf(avatarFilterBlock, count, count)
+}
+
+// parsePick extracts the pick from a select-source reply. It returns a
+// 0-based result index, or -1 for an explicit "PICK: none"; ok is false when
+// no valid PICK line exists.
+func parsePick(output string, max int) (int, bool) {
+	for _, line := range strings.Split(output, "\n") {
+		trimmed := strings.TrimSpace(line)
+		upper := strings.ToUpper(trimmed)
+		if !strings.HasPrefix(upper, "PICK:") {
+			continue
+		}
+		val := strings.TrimSpace(trimmed[len("PICK:"):])
+		if strings.EqualFold(val, "none") {
+			return -1, true
+		}
+		// Accept a leading integer, ignoring trailing prose ("PICK: 1 (best)").
+		j := 0
+		for j < len(val) && val[j] >= '0' && val[j] <= '9' {
+			j++
+		}
+		if j == 0 {
+			return 0, false
+		}
+		n, err := strconv.Atoi(val[:j])
+		if err != nil || n < 1 || n > max {
+			return 0, false
+		}
+		return n - 1, true
+	}
+	return 0, false
+}
+
+const (
+	// charsPerToken is the coarse token estimate used for the scrape budget.
+	charsPerToken = 4
+	// synthesisOutputBudget is the token budget the synthesis prompt mandates
+	// for the permanent persona fields.
+	synthesisOutputBudget = 1500
+	// scrapeBudgetFloor keeps a tiny MaxContext from starving the source.
+	scrapeBudgetFloor = 500
+)
+
+// scrapeTokenBudget is the token allowance for scraped page content: the
+// context limit minus the rest of the synthesis call (the rendered prompt,
+// the mandated output, and a 20% estimation margin).
+func (s *SynthesizerClient) scrapeTokenBudget(renderedPrompt string) int {
+	budget := s.config.LLM.MaxContext - len(renderedPrompt)/charsPerToken - synthesisOutputBudget - s.config.LLM.MaxContext/5
+	if budget < scrapeBudgetFloor {
+		budget = scrapeBudgetFloor
+	}
+	return budget
+}
+
+// truncateToParagraphs cuts text to maxChars at the last paragraph boundary
+// before the limit, appending a truncation marker.
+func truncateToParagraphs(text string, maxChars int) string {
+	if len(text) <= maxChars {
+		return text
+	}
+	cut := text[:maxChars]
+	if i := strings.LastIndex(cut, "\n\n"); i > 0 {
+		cut = cut[:i]
+	}
+	return strings.TrimSpace(cut) + "\n[…] truncated"
 }
 
 // avatarPickBlock is the {{AVATAR_BLOCK}} content for a synthesis call that
 // carries candidate avatar images. The %d placeholders are the candidate count.
 const avatarPickBlock = `### Avatar Selection
-The attached image shows %d candidate photos of this character arranged in a single horizontal row, left to right, numbered 1 to %d.
+The attached images are %d candidate photos of this character, numbered 1 to %d in the order they are attached.
 - These photos are pulled from the web: they may be fan art, promotional renders, or the wrong person entirely.
 - Compare ALL of the photos and pick the single best one: it must clearly be the character, and of the photos that are, it should be the one that would look best as a small Discord profile picture while still representing the character well: the face clearly visible and roughly centered, decent lighting, a single subject (no group shots), and no heavy text, borders, or watermark clutter.
 - Output ` + "`AVATAR: n`" + ` (where n is the 1-based position of the best photo) on a line by itself before the specification.

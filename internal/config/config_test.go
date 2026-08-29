@@ -12,7 +12,7 @@ func TestLoadConfig(t *testing.T) {
 		"DISCORD_TOKEN", "CLIENT_ID",
 		"LLM_URL", "LLM_MODEL", "LLM_MAX_RETRIES", "LLM_MAX_CONTEXT", "LLM_COMPACTION_THRESHOLD", "LLM_RECENT_MEMORY_WINDOW", "LLM_VISION", "LLM_MAX_IMAGES",
 		"SYSTEM_PROMPT_PATH", "COMPACTION_PROMPT_PATH", "SYNTHESIS_PROMPT_PATH", "ANALYZER_PROMPT_PATH", "EDIT_SECTION_PROMPT_PATH",
-		"SEARCH_PROVIDER", "SEARXNG_URL", "SEARXNG_ENGINES", "MAX_SEARCH_RESULTS", "IMAGE_CACHE_DIR", "LLM_AVATAR_PICK",
+		"SEARCH_PROVIDER", "SEARXNG_URL", "SEARXNG_ENGINES", "MAX_SEARCH_RESULTS", "IMAGE_CACHE_DIR", "IMAGE_MAX_EDGE", "MAX_IMAGE_SEARCH_RESULTS", "LLM_AVATAR_PICK",
 		"INVITE_COMMAND_ENABLED",
 		"LOG_LEVEL", "CONVERSATION_LOG", "COMMANDS_ADMIN_ONLY",
 	}
@@ -53,6 +53,8 @@ func TestLoadConfig(t *testing.T) {
 	os.Setenv("SEARXNG_ENGINES", "google,bing")
 	os.Setenv("MAX_SEARCH_RESULTS", "10")
 	os.Setenv("IMAGE_CACHE_DIR", "test/cache")
+	os.Setenv("MAX_IMAGE_SEARCH_RESULTS", "7")
+	os.Setenv("IMAGE_MAX_EDGE", "256")
 	os.Setenv("LLM_AVATAR_PICK", "true")
 	os.Setenv("LOG_LEVEL", "DEBUG")
 	os.Setenv("INVITE_COMMAND_ENABLED", "true")
@@ -121,6 +123,12 @@ func TestLoadConfig(t *testing.T) {
 	if cfg.Images.CacheDir != "test/cache" {
 		t.Errorf("Expected IMAGE_CACHE_DIR test/cache, got %s", cfg.Images.CacheDir)
 	}
+	if cfg.Images.MaxImageSearchResults != 7 {
+		t.Errorf("Expected MAX_IMAGE_SEARCH_RESULTS 7, got %d", cfg.Images.MaxImageSearchResults)
+	}
+	if cfg.Images.MaxImageEdge != 256 {
+		t.Errorf("Expected IMAGE_MAX_EDGE 256, got %d", cfg.Images.MaxImageEdge)
+	}
 	if !cfg.LLM.AvatarPick {
 		t.Error("Expected LLM_AVATAR_PICK true")
 	}
@@ -144,7 +152,7 @@ func TestLoadConfigDefaults(t *testing.T) {
 		"DISCORD_TOKEN", "CLIENT_ID",
 		"LLM_URL", "LLM_MODEL", "LLM_MAX_RETRIES", "LLM_MAX_CONTEXT", "LLM_COMPACTION_THRESHOLD", "LLM_RECENT_MEMORY_WINDOW", "LLM_VISION", "LLM_MAX_IMAGES",
 		"SYSTEM_PROMPT_PATH", "COMPACTION_PROMPT_PATH", "SYNTHESIS_PROMPT_PATH", "ANALYZER_PROMPT_PATH", "EDIT_SECTION_PROMPT_PATH",
-		"SEARCH_PROVIDER", "SEARXNG_URL", "SEARXNG_ENGINES", "MAX_SEARCH_RESULTS", "IMAGE_CACHE_DIR", "LLM_AVATAR_PICK",
+		"SEARCH_PROVIDER", "SEARXNG_URL", "SEARXNG_ENGINES", "MAX_SEARCH_RESULTS", "IMAGE_CACHE_DIR", "IMAGE_MAX_EDGE", "MAX_IMAGE_SEARCH_RESULTS", "LLM_AVATAR_PICK",
 		"INVITE_COMMAND_ENABLED",
 		"LOG_LEVEL", "CONVERSATION_LOG", "COMMANDS_ADMIN_ONLY",
 	}
@@ -198,11 +206,17 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if cfg.Search.SearXNGEngines != "" {
 		t.Errorf("Expected default SEARXNG_ENGINES, got %s", cfg.Search.SearXNGEngines)
 	}
-	if cfg.Search.MaxResults != 3 {
-		t.Errorf("Expected default MAX_SEARCH_RESULTS 3, got %d", cfg.Search.MaxResults)
+	if cfg.Search.MaxResults != 5 {
+		t.Errorf("Expected default MAX_SEARCH_RESULTS 5, got %d", cfg.Search.MaxResults)
 	}
 	if cfg.Images.CacheDir != "images/cache" {
 		t.Errorf("Expected default IMAGE_CACHE_DIR, got %s", cfg.Images.CacheDir)
+	}
+	if cfg.Images.MaxImageSearchResults != 10 {
+		t.Errorf("Expected default MAX_IMAGE_SEARCH_RESULTS 10, got %d", cfg.Images.MaxImageSearchResults)
+	}
+	if cfg.Images.MaxImageEdge != 512 {
+		t.Errorf("Expected default IMAGE_MAX_EDGE 512, got %d", cfg.Images.MaxImageEdge)
 	}
 	if cfg.LLM.AvatarPick {
 		t.Error("Expected default LLM_AVATAR_PICK false")
@@ -218,6 +232,55 @@ func TestLoadConfigDefaults(t *testing.T) {
 	}
 	if cfg.General.CommandsAdminOnly {
 		t.Error("Expected default COMMANDS_ADMIN_ONLY false")
+	}
+}
+
+func TestLoadConfigMaxImageEdgeSanitized(t *testing.T) {
+	defer os.Unsetenv("IMAGE_MAX_EDGE")
+	for _, v := range []string{"0", "-1"} {
+		os.Setenv("IMAGE_MAX_EDGE", v)
+		cfg := LoadConfig()
+		if cfg.Images.MaxImageEdge != 512 {
+			t.Errorf("IMAGE_MAX_EDGE=%s: expected sanitized 512, got %d", v, cfg.Images.MaxImageEdge)
+		}
+	}
+}
+
+func TestLoadConfigPositiveIntsSanitized(t *testing.T) {
+	vars := map[string]string{
+		"LLM_TIMEOUT_SECONDS": "0",
+		"LLM_MAX_RETRIES":     "-3",
+		"LLM_MAX_CONTEXT":     "-1",
+		"LLM_MAX_IMAGES":      "0",
+		"MAX_SEARCH_RESULTS":  "-5",
+		"AMBIENT_MIN_SECONDS": "0",
+		"AMBIENT_REPLY_COUNT": "-1",
+	}
+	for k := range vars {
+		defer os.Unsetenv(k)
+		os.Setenv(k, vars[k])
+	}
+	cfg := LoadConfig()
+	if cfg.LLM.TimeoutSeconds != 120 || cfg.LLM.MaxRetries != 2 || cfg.LLM.MaxContext != 10000 ||
+		cfg.LLM.MaxImages != 2 || cfg.Search.MaxResults != 5 ||
+		cfg.Ambient.MinSeconds != 14400 || cfg.Ambient.ReplyCount != 5 {
+		t.Errorf("expected non-positive values to fall back to defaults, got %+v", cfg)
+	}
+}
+
+func TestLoadConfigClampedFloats(t *testing.T) {
+	defer os.Unsetenv("LLM_COMPACTION_THRESHOLD")
+	defer os.Unsetenv("AMBIENT_TICK_PROBABILITY")
+	defer os.Unsetenv("AMBIENT_REPLY_PROBABILITY")
+	os.Setenv("LLM_COMPACTION_THRESHOLD", "1.5")
+	os.Setenv("AMBIENT_TICK_PROBABILITY", "-0.2")
+	os.Setenv("AMBIENT_REPLY_PROBABILITY", "2")
+	cfg := LoadConfig()
+	if cfg.LLM.CompactionThreshold != 1 {
+		t.Errorf("expected compaction threshold clamped to 1, got %f", cfg.LLM.CompactionThreshold)
+	}
+	if cfg.Ambient.TickProbability != 0 || cfg.Ambient.ReplyProbability != 1 {
+		t.Errorf("expected probabilities clamped to [0,1], got %f / %f", cfg.Ambient.TickProbability, cfg.Ambient.ReplyProbability)
 	}
 }
 

@@ -23,7 +23,8 @@ import (
 )
 
 const (
-	// avatarSearchLimit is how many image candidates to search for.
+	// avatarSearchLimit is the fallback for how many image candidates to
+	// search for when MAX_IMAGE_SEARCH_RESULTS is unset or non-positive.
 	avatarSearchLimit = 10
 
 	// avatarRowLimit is the maximum number of candidates shown in the row.
@@ -43,6 +44,7 @@ type createCharacterCmd struct {
 type createResult struct {
 	card          *session.CharacterCard
 	candidates    []string
+	kept          []string
 	rowBytes      []byte
 	titles        map[string]string
 	avatarChoice  int
@@ -160,7 +162,7 @@ func (c *createCharacterCmd) fetchAndSetupCharacter(ctx context.Context, s Disco
 		return nil, fmt.Errorf("character unknown: %s", userInput)
 	case research.AnalysisStatusAmbiguous:
 		s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
-			Content: utils.PtrString(fmt.Sprintf(responses.CreateCharacter.Ambiguous, userInput, strings.Join(analysis.Ambiguities, "\n"))),
+			Content: utils.PtrString(fmt.Sprintf(responses.CreateCharacter.Ambiguous, analysis.OfficialName, strings.Join(analysis.Ambiguities, "\n"))),
 		})
 		return nil, fmt.Errorf("character ambiguous: %s", userInput)
 	case research.AnalysisStatusInjection:
@@ -175,12 +177,12 @@ func (c *createCharacterCmd) fetchAndSetupCharacter(ctx context.Context, s Disco
 	}
 
 	// Avatar candidates
-	candidates, rowBytes, titles := c.fetchAvatarCandidates(ctx, analysis)
+	candidates, candidateURIs, rowBytes, titles := c.fetchAvatarCandidates(ctx, analysis)
 
-	var imageURIs []string
+	var avatarURIs []string
 	if c.config.LLM.AvatarPick && len(candidates) > 0 {
 		if c.config.LLM.Vision {
-			imageURIs = []string{utils.PNGDataURI(rowBytes)}
+			avatarURIs = candidateURIs
 		} else {
 			logger.FromContext(ctx).Info("avatar model pick enabled but LLM vision is disabled; falling back to manual selection")
 		}
@@ -188,7 +190,7 @@ func (c *createCharacterCmd) fetchAndSetupCharacter(ctx context.Context, s Disco
 
 	// Research and Synthesize
 	start := time.Now()
-	res, err := synth.FetchCharacter(ctx, analysis, imageURIs, len(candidates))
+	res, err := synth.FetchCharacter(ctx, analysis, avatarURIs)
 	latency := time.Since(start)
 	if err != nil {
 		s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
@@ -197,14 +199,26 @@ func (c *createCharacterCmd) fetchAndSetupCharacter(ctx context.Context, s Disco
 		return nil, err
 	}
 
+	// Log the source-select exchange to the conversation audit trail
+	if res.SelectPrompt != "" {
+		c.audit.Log(ctx, i.GuildID, "", characterID, uuid.New().String(), audit.Turn{
+			Kind:      audit.KindSourceSelect,
+			Latency:   res.SelectLatency,
+			Prompt:    res.SelectPrompt,
+			Reasoning: res.SelectReasoning,
+			Response:  res.SelectResponse,
+		})
+	}
+
 	// Log the synthesis to the conversation audit trail
-	synthesisPrompt := fmt.Sprintf("Request: %s\n\nResearch Dossier:\n%s", userInput, res.ResearchData)
+	kept := c.keptCandidates(candidates, res)
+	synthesisPrompt := fmt.Sprintf("Request: %s\n\n%s", userInput, res.SynthesisPrompt)
 	if len(candidates) > 0 {
 		pick := "none"
-		if len(imageURIs) > 0 && res.AvatarChoice > 0 {
-			pick = fmt.Sprintf("%d of %d", res.AvatarChoice, len(candidates))
+		if len(avatarURIs) > 0 && res.AvatarChoice > 0 {
+			pick = fmt.Sprintf("%d of %d kept", res.AvatarChoice, len(kept))
 		}
-		synthesisPrompt += fmt.Sprintf("\n\nAvatar candidates: %d (model pick: %s)", len(candidates), pick)
+		synthesisPrompt += fmt.Sprintf("\n\nAvatar candidates: %d (kept after pre-filter: %d, model pick: %s)", len(candidates), len(kept), pick)
 	}
 
 	synthesisResponse := res.PersonaSpec
@@ -228,7 +242,7 @@ func (c *createCharacterCmd) fetchAndSetupCharacter(ctx context.Context, s Disco
 		return nil, fmt.Errorf("character unknown: %s", userInput)
 	case research.SynthesisStatusAmbiguous:
 		s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
-			Content: utils.PtrString(fmt.Sprintf(responses.CreateCharacter.Ambiguous, userInput, strings.Join(res.Ambiguities, "\n"))),
+			Content: utils.PtrString(fmt.Sprintf(responses.CreateCharacter.Ambiguous, analysis.OfficialName, strings.Join(res.Ambiguities, "\n"))),
 		})
 		return nil, fmt.Errorf("character ambiguous: %s", userInput)
 	case research.SynthesisStatusOK:
@@ -264,35 +278,56 @@ func (c *createCharacterCmd) fetchAndSetupCharacter(ctx context.Context, s Disco
 	return &createResult{
 		card:          finalCard,
 		candidates:    candidates,
+		kept:          kept,
 		rowBytes:      rowBytes,
 		titles:        titles,
 		avatarChoice:  res.AvatarChoice,
-		pickAttempted: len(imageURIs) > 0,
+		pickAttempted: len(avatarURIs) > 0,
 		greeting:      greeting,
 	}, nil
+}
+
+// keptCandidates maps the model's avatar pre-filter (1-based original
+// positions) back onto candidate URLs. When no filtering was performed
+// (AvatarKept is nil) all candidates are kept.
+func (c *createCharacterCmd) keptCandidates(candidates []string, res *research.SynthesisResult) []string {
+	if res.AvatarKept == nil {
+		return candidates
+	}
+	kept := make([]string, 0, len(res.AvatarKept))
+	for _, pos := range res.AvatarKept {
+		if pos >= 1 && pos <= len(candidates) {
+			kept = append(kept, candidates[pos-1])
+		}
+	}
+	return kept
 }
 
 // fetchAvatarCandidates searches for candidate profile pictures and composes
 // them into a row. Any failure degrades to no candidates (no images on the
 // synthesis call, no avatar menu), which matches the pre-feature behavior.
-func (c *createCharacterCmd) fetchAvatarCandidates(ctx context.Context, analysis *research.AnalysisResult) ([]string, []byte, map[string]string) {
+func (c *createCharacterCmd) fetchAvatarCandidates(ctx context.Context, analysis *research.AnalysisResult) ([]string, []string, []byte, map[string]string) {
 	if c.imageClient == nil {
 		logger.FromContext(ctx).Error("no image client available")
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	query := fmt.Sprintf("%s profile picture", analysis.DisplayName)
 	if analysis.Series != "" {
 		query = fmt.Sprintf("%s (%s) profile picture", analysis.DisplayName, analysis.Series)
 	}
-	imgResults, err := c.imageClient.SearchImages(ctx, query, avatarSearchLimit)
+	avatarLimit := c.config.Images.MaxImageSearchResults
+	if avatarLimit <= 0 {
+		avatarLimit = avatarSearchLimit
+	}
+	imgResults, err := c.imageClient.SearchImages(ctx, query, avatarLimit)
 	if err != nil {
 		logger.FromContext(ctx).Warn("image search failed", "error", err)
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 
 	if len(imgResults) == 0 {
 		logger.FromContext(ctx).Info("no images found", "character", analysis.DisplayName)
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 
 	var urls []string
@@ -302,24 +337,25 @@ func (c *createCharacterCmd) fetchAvatarCandidates(ctx context.Context, analysis
 		titles[img.URL] = img.Title
 	}
 
-	// Download the candidates and tile them into a single row image.
-	// Candidates that fail to fetch are skipped, so the row still fills
-	// up to avatarRowLimit options.
-	rowBytes, included, err := c.imageClient.ComposeRow(ctx, urls, avatarRowLimit)
+	// Download the candidates, keeping the processed bytes for the LLM and
+	// tiling them into a single row image for display. Candidates that fail
+	// to fetch are skipped, so the row still fills up to avatarRowLimit
+	// options.
+	dataURIs, included, rowBytes, err := c.imageClient.FetchCandidates(ctx, urls, avatarRowLimit)
 	if err != nil || len(included) == 0 {
 		logger.FromContext(ctx).Warn("no avatar options could be fetched", "error", err)
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 
 	logger.FromContext(ctx).Info("found images", "count", len(included), "character", analysis.DisplayName)
-	return included, rowBytes, titles
+	return included, dataURIs, rowBytes, titles
 }
 
 // finalizeAvatar applies the model's avatar pick when it is valid, otherwise
 // offers the candidates in the manual select menu.
 func (c *createCharacterCmd) finalizeAvatar(ctx context.Context, s DiscordSession, i *discordgo.InteractionCreate, r *createResult) error {
 	if r.isModelPickValid() {
-		if err := c.applyAvatar(ctx, s, i.GuildID, r.card.CharacterID, r.candidates[r.avatarChoice-1]); err != nil {
+		if err := c.applyAvatar(ctx, s, i.GuildID, r.card.CharacterID, r.kept[r.avatarChoice-1]); err != nil {
 			logger.FromContext(ctx).Warn("failed to apply model-picked avatar, falling back to manual selection", "error", err, "guild_id", i.GuildID, "character_id", r.card.CharacterID)
 		} else {
 			logger.FromContext(ctx).Info("model-picked avatar applied", "guild_id", i.GuildID, "character_id", r.card.CharacterID, "index", r.avatarChoice)
@@ -338,7 +374,7 @@ func (c *createCharacterCmd) finalizeAvatar(ctx context.Context, s DiscordSessio
 // isModelPickValid reports whether the model was shown candidates and picked
 // one of them.
 func (r *createResult) isModelPickValid() bool {
-	return r.pickAttempted && r.avatarChoice >= 1 && r.avatarChoice <= len(r.candidates)
+	return r.pickAttempted && r.avatarChoice >= 1 && r.avatarChoice <= len(r.kept)
 }
 
 // renderAvatarMenu shows the candidate row with a manual select menu, or a

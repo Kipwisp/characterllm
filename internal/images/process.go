@@ -2,8 +2,8 @@ package images
 
 import (
 	"bytes"
+	"fmt"
 	"image"
-	"image/gif"
 	"image/jpeg"
 	"image/png"
 
@@ -12,9 +12,6 @@ import (
 )
 
 const (
-	// maxImageEdge caps the long edge of cached images.
-	maxImageEdge = 512
-
 	// jpegQuality is the re-encode quality for opaque images.
 	jpegQuality = 90
 )
@@ -47,34 +44,29 @@ func sniffImageType(b []byte) (string, bool) {
 	return "", false
 }
 
-// processImage downscales and re-encodes image bytes for avatar use: the long
-// edge is capped at maxImageEdge, opaque images are re-encoded as JPEG and
-// images with transparency as PNG. Animated GIFs and content that cannot be decoded are returned unchanged with the sniffed extension.
-func processImage(data []byte, ext string) ([]byte, string) {
-	img, format, err := image.Decode(bytes.NewReader(data))
+// processImage downscales and re-encodes image bytes: the long edge is
+// capped at maxEdge, opaque images are re-encoded as JPEG and images with
+// transparency as PNG. Only the first frame of a multi-frame image (e.g. an
+// animated GIF) is kept. Content that cannot be decoded is an error.
+func processImage(data []byte, ext string, maxEdge int) ([]byte, string, error) {
+	img, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
-		return data, ext
-	}
-	if format == "gif" {
-		g, err := gif.DecodeAll(bytes.NewReader(data))
-		if err == nil && len(g.Image) > 1 {
-			return data, ext
-		}
+		return nil, "", fmt.Errorf("content does not decode as an image: %w", err)
 	}
 
-	scaled := scaleDown(img, maxImageEdge)
+	scaled := scaleDown(img, maxEdge)
 
 	var buf bytes.Buffer
 	if hasTransparency(scaled) {
 		if err := png.Encode(&buf, scaled); err != nil {
-			return data, ext
+			return nil, "", fmt.Errorf("re-encode failed: %w", err)
 		}
-		return buf.Bytes(), ".png"
+		return buf.Bytes(), ".png", nil
 	}
 	if err := jpeg.Encode(&buf, scaled, &jpeg.Options{Quality: jpegQuality}); err != nil {
-		return data, ext
+		return nil, "", fmt.Errorf("re-encode failed: %w", err)
 	}
-	return buf.Bytes(), ".jpg"
+	return buf.Bytes(), ".jpg", nil
 }
 
 // scaleDown returns img drawn into an NRGBA canvas whose long edge is at most

@@ -12,6 +12,11 @@ import (
 	"characterllm/internal/search"
 )
 
+// maxDownloadBytes caps image downloads to bound disk and memory usage. It
+// matches Discord's 10 MB avatar upload limit so legitimate avatar photos
+// are not rejected.
+const maxDownloadBytes = 10 << 20 // 10 MiB
+
 // ImageClient defines the interface for searching and caching character images.
 type ImageClient interface {
 	SearchImages(ctx context.Context, query string, limit int) ([]search.Image, error)
@@ -21,26 +26,24 @@ type ImageClient interface {
 	// ImageToDataURI downloads the image at url, processes it, and returns it
 	// as a data URI suitable for a vision model. Nothing is written to disk.
 	ImageToDataURI(ctx context.Context, url string) (string, error)
-	// ComposeRow downloads each url, tiles up to limit successfully decoded
-	// images into a single horizontal row on a transparent background (urls
-	// that fail to fetch do not count against the limit), and returns the
-	// PNG-encoded row plus the urls that made it in, in row order.
-	ComposeRow(ctx context.Context, urls []string, limit int) ([]byte, []string, error)
+	// FetchCandidates downloads each url, processes up to limit successful
+	// images, and returns in row order: each processed image as a data URI,
+	// the urls that made it in, and a PNG row tiling the images for display
+	// (urls that fail to fetch do not count against the limit).
+	FetchCandidates(ctx context.Context, urls []string, limit int) (dataURIs []string, included []string, rowPNG []byte, err error)
 	// DeleteImage removes a character's cached image from disk.
 	DeleteImage(guildID, characterID string) error
 	GetCache() *ImageCache
 }
-
-// maxDownloadBytes caps image downloads to bound disk and memory usage. It
-// matches Discord's 10 MB avatar upload limit so legitimate avatar photos
-// are not rejected.
-const maxDownloadBytes = 10 << 20 // 10 MiB
 
 // Client orchestrates image search, download, processing, and caching.
 type Client struct {
 	Provider search.ImageSearchProvider
 	Cache    *ImageCache
 	Fetcher  *safehttp.Fetcher
+	// MaxImageEdge caps the long edge of processed images; the config layer
+	// guarantees a positive value.
+	MaxImageEdge int
 }
 
 // DeleteImage removes a character's cached image from disk.
@@ -104,8 +107,7 @@ func (c *Client) fetchImage(ctx context.Context, url string) ([]byte, string, er
 	if !ok {
 		return nil, "", fmt.Errorf("downloaded content is not a recognized image")
 	}
-	processed, pext := processImage(data, ext)
-	return processed, pext, nil
+	return processImage(data, ext, c.MaxImageEdge)
 }
 
 // GetImage returns the local path of the cached image for a guild and character.
@@ -137,10 +139,11 @@ func mimeForExt(ext string) string {
 }
 
 // NewImageClient is a factory that returns the configured image client.
-func NewImageClient(provider search.ImageSearchProvider, cacheDir string) ImageClient {
+func NewImageClient(provider search.ImageSearchProvider, cacheDir string, maxImageEdge int) ImageClient {
 	return &Client{
-		Provider: provider,
-		Cache:    NewImageCache(cacheDir),
-		Fetcher:  safehttp.NewFetcher(),
+		Provider:     provider,
+		Cache:        NewImageCache(cacheDir),
+		Fetcher:      safehttp.NewFetcher(),
+		MaxImageEdge: maxImageEdge,
 	}
 }

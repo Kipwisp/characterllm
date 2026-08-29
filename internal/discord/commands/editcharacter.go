@@ -37,6 +37,7 @@ const (
 
 	sectionKeyIdentity   = "identity"
 	sectionKeyAppearance = "appearance"
+	sectionKeyRole       = "role"
 	sectionKeyVoice      = "voice"
 	sectionKeyDialogue   = "dialogue"
 	sectionKeyScenario   = "scenario"
@@ -48,6 +49,7 @@ const (
 var editSectionChoices = map[string]string{
 	sectionKeyIdentity:   research.SectionIdentity,
 	sectionKeyAppearance: research.SectionAppearance,
+	sectionKeyRole:       research.SectionRole,
 	sectionKeyVoice:      research.SectionVoice,
 	sectionKeyDialogue:   research.SectionDialogue,
 	sectionKeyScenario:   research.SectionScenario,
@@ -118,6 +120,7 @@ func (c *editCharacterCmd) Definition() *discordgo.ApplicationCommand {
 					{Name: "General (whole persona)", Value: sectionKeyGeneral},
 					{Name: "Identity & Temperament", Value: sectionKeyIdentity},
 					{Name: "Appearance", Value: sectionKeyAppearance},
+					{Name: "Role & Relationships", Value: sectionKeyRole},
 					{Name: "Voice & Habits", Value: sectionKeyVoice},
 					{Name: "Example Dialogue", Value: sectionKeyDialogue},
 					{Name: "Scenario", Value: sectionKeyScenario},

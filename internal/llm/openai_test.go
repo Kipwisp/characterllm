@@ -32,6 +32,36 @@ func TestGenerateResponse_Timeout(t *testing.T) {
 	}
 }
 
+func TestImageTokenEstimateFor(t *testing.T) {
+	tests := []struct {
+		maxEdge int
+		want    int
+		wantErr bool
+	}{
+		{-1, 0, true},
+		{0, 0, true},
+		{256, 150, false}, // 125 scales below the floor
+		{512, 500, false},
+		{1024, 2000, false},
+	}
+	for _, tt := range tests {
+		got, err := ImageTokenEstimateFor(tt.maxEdge)
+		if tt.wantErr {
+			if err == nil {
+				t.Errorf("ImageTokenEstimateFor(%d): expected error, got %d", tt.maxEdge, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("ImageTokenEstimateFor(%d): unexpected error: %v", tt.maxEdge, err)
+			continue
+		}
+		if got != tt.want {
+			t.Errorf("ImageTokenEstimateFor(%d) = %d, want %d", tt.maxEdge, got, tt.want)
+		}
+	}
+}
+
 func TestEstimateTokens(t *testing.T) {
 	tests := []struct {
 		name           string

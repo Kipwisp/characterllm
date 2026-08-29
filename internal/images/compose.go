@@ -3,6 +3,7 @@ package images
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"image"
 	"image/png"
@@ -18,19 +19,19 @@ const (
 	rowGutter = 16
 )
 
-// ComposeRow downloads each url under the safehttp policy and tiles the
-// successfully decoded images left to right into a single horizontal row,
-// stopping once limit images have been fetched (urls that fail to fetch do not
-// count against the limit). It returns the row encoded as PNG and the urls that
-// made it in, in roworder.
-func (c *Client) ComposeRow(ctx context.Context, urls []string, limit int) ([]byte, []string, error) {
+// FetchCandidates downloads each url under the safehttp policy and, for up to
+// limit successfully processed images, returns in row order: the processed
+// image as a data URI, the url that made it in, plus a single horizontal row
+// PNG tiling the images for display (urls that fail to fetch do not count
+// against the limit).
+func (c *Client) FetchCandidates(ctx context.Context, urls []string, limit int) ([]string, []string, []byte, error) {
+	var dataURIs, included []string
 	var tiles []image.Image
-	var included []string
 	for _, url := range urls {
 		if limit > 0 && len(tiles) == limit {
 			break
 		}
-		data, _, err := c.fetchImage(ctx, url)
+		data, ext, err := c.fetchImage(ctx, url)
 		if err != nil {
 			continue
 		}
@@ -40,11 +41,21 @@ func (c *Client) ComposeRow(ctx context.Context, urls []string, limit int) ([]by
 		}
 		tiles = append(tiles, img)
 		included = append(included, url)
+		dataURIs = append(dataURIs, fmt.Sprintf("data:%s;base64,%s", mimeForExt(ext), base64.StdEncoding.EncodeToString(data)))
 	}
 	if len(tiles) == 0 {
-		return nil, nil, fmt.Errorf("no images could be fetched")
+		return nil, nil, nil, fmt.Errorf("no images could be fetched")
 	}
+	row, err := composeRowFromImages(tiles)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return dataURIs, included, row, nil
+}
 
+// composeRowFromImages tiles the images left to right into a single
+// horizontal row on a transparent background and returns it as PNG.
+func composeRowFromImages(tiles []image.Image) ([]byte, error) {
 	row := image.NewNRGBA(image.Rect(0, 0, len(tiles)*rowCellSize+(len(tiles)-1)*rowGutter, rowCellSize))
 	x := 0
 	for _, img := range tiles {
@@ -66,7 +77,7 @@ func (c *Client) ComposeRow(ctx context.Context, urls []string, limit int) ([]by
 
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, row); err != nil {
-		return nil, nil, fmt.Errorf("encode row image: %w", err)
+		return nil, fmt.Errorf("encode row image: %w", err)
 	}
-	return buf.Bytes(), included, nil
+	return buf.Bytes(), nil
 }

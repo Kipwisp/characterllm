@@ -3,8 +3,47 @@ package safehttp
 import (
 	"context"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 )
+
+// TestGetUserAgent verifies that requests carry the default User-Agent and
+// that a configured override wins. The built-in Validate policy is bypassed
+// so the plain-httptest server can be dialed.
+func TestGetUserAgent(t *testing.T) {
+	var gotUA string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUA = r.Header.Get("User-Agent")
+		w.Write([]byte("ok"))
+	}))
+	defer server.Close()
+
+	validate := func(ctx context.Context, raw string) (string, string, error) {
+		return raw, "localhost", nil
+	}
+
+	f := &Fetcher{Validate: validate}
+	resp, err := f.Get(context.Background(), server.URL)
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+	resp.Body.Close()
+	if gotUA != defaultUserAgent {
+		t.Errorf("User-Agent = %q, want %q", gotUA, defaultUserAgent)
+	}
+
+	f.UserAgent = "custom-agent/1.0"
+	gotUA = ""
+	resp, err = f.Get(context.Background(), server.URL)
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+	resp.Body.Close()
+	if gotUA != "custom-agent/1.0" {
+		t.Errorf("User-Agent = %q, want the configured override", gotUA)
+	}
+}
 
 func TestValidate(t *testing.T) {
 	ctx := context.Background()

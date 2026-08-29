@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-const testSpec = "### Identity & Temperament\nCold and questioning because of a decade in exile.\n\n### Appearance\n- **Species/Origin**: Human\n- **Eyes/Hair**: Grey eyes, white hair\n\n### Voice & Habits\nSlow cadence, dry wit.\n\n### Example Dialogue\n<START>\nUser: Hello\nCharacter: You again.\n"
+const testSpec = "### Identity & Temperament\nCold and questioning because of a decade in exile.\n\n### Appearance\n- **Species/Origin**: Human\n- **Eyes/Hair**: Grey eyes, white hair\n\n### Role & Relationships\n- **Role/Occupation**: Cartographer\n\n### Voice & Habits\nSlow cadence, dry wit.\n\n### Example Dialogue\n<START>\nUser: Hello\nCharacter: You again.\n"
 
 func TestExtractSection(t *testing.T) {
 	body, ok := ExtractSection(testSpec, SectionAppearance)
@@ -91,10 +91,10 @@ func TestRemoveSection(t *testing.T) {
 	if strings.Contains(stripped, "### Appearance") {
 		t.Errorf("Appearance not removed:\n%s", stripped)
 	}
-	if !strings.Contains(stripped, "### Identity & Temperament") || !strings.Contains(stripped, "### Voice & Habits") {
+	if !strings.Contains(stripped, "### Identity & Temperament") || !strings.Contains(stripped, "### Role & Relationships") {
 		t.Errorf("neighbors lost after removal:\n%s", stripped)
 	}
-	if !strings.Contains(stripped, "in exile.\n\n### Voice & Habits") {
+	if !strings.Contains(stripped, "in exile.\n\n### Role & Relationships") {
 		t.Errorf("spacing not normalized after removal:\n%s", stripped)
 	}
 
@@ -132,6 +132,28 @@ func TestStripScenarioSection(t *testing.T) {
 	// No scenario: unchanged.
 	if got := stripScenarioSection(testSpec); got != testSpec {
 		t.Errorf("spec without Scenario changed:\n%s", got)
+	}
+}
+
+func TestPersonaSectionOrder_RolePlacement(t *testing.T) {
+	indexOf := func(name string) int {
+		for i, s := range PersonaSectionOrder {
+			if s == name {
+				return i
+			}
+		}
+		return -1
+	}
+	if !(indexOf(SectionAppearance) < indexOf(SectionRole) && indexOf(SectionRole) < indexOf(SectionVoice)) {
+		t.Fatalf("Role & Relationships must sit between Appearance and Voice & Habits, got %v", PersonaSectionOrder)
+	}
+
+	body, ok := ExtractSection(testSpec, SectionRole)
+	if !ok {
+		t.Fatal("expected Role & Relationships section in testSpec")
+	}
+	if want := "- **Role/Occupation**: Cartographer"; body != want {
+		t.Errorf("Role body = %q, want %q", body, want)
 	}
 }
 

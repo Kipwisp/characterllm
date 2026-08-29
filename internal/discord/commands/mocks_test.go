@@ -17,7 +17,7 @@ type mockLLMClient = mocks.MockLLMClient
 
 type mockSynthesizer struct {
 	AnalyzeInputFn   func(ctx context.Context, input string) (*research.AnalysisResult, string, string, error)
-	FetchCharacterFn func(ctx context.Context, analysis *research.AnalysisResult, imageURIs []string, candidateCount int) (*research.SynthesisResult, error)
+	FetchCharacterFn func(ctx context.Context, analysis *research.AnalysisResult, avatarDataURIs []string) (*research.SynthesisResult, error)
 	RewriteSectionFn func(ctx context.Context, req research.SectionRewriteRequest) (*research.SectionRewriteResult, error)
 }
 
@@ -28,11 +28,11 @@ func (m *mockSynthesizer) AnalyzeInput(ctx context.Context, input string) (*rese
 	return m.AnalyzeInputFn(ctx, input)
 }
 
-func (m *mockSynthesizer) FetchCharacter(ctx context.Context, analysis *research.AnalysisResult, imageURIs []string, candidateCount int) (*research.SynthesisResult, error) {
+func (m *mockSynthesizer) FetchCharacter(ctx context.Context, analysis *research.AnalysisResult, avatarDataURIs []string) (*research.SynthesisResult, error) {
 	if m.FetchCharacterFn == nil {
 		return nil, nil
 	}
-	return m.FetchCharacterFn(ctx, analysis, imageURIs, candidateCount)
+	return m.FetchCharacterFn(ctx, analysis, avatarDataURIs)
 }
 
 func (m *mockSynthesizer) RewriteSection(ctx context.Context, req research.SectionRewriteRequest) (*research.SectionRewriteResult, error) {

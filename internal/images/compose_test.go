@@ -18,7 +18,7 @@ func TestClientComposeRow(t *testing.T) {
 		return image.NewRGBA(image.Rect(0, 0, w, h))
 	}
 
-	client := &Client{Cache: NewImageCache(t.TempDir()), Fetcher: safehttp.NewFetcher()}
+	client := &Client{Cache: NewImageCache(t.TempDir()), Fetcher: safehttp.NewFetcher(), MaxImageEdge: testMaxImageEdge}
 	client.Fetcher.Validate = func(ctx context.Context, raw string) (string, string, error) {
 		return raw, "localhost", nil
 	}
@@ -42,12 +42,15 @@ func TestClientComposeRow(t *testing.T) {
 	t.Cleanup(bad.Close)
 
 	t.Run("Tiles Fetched Images In Row Order", func(t *testing.T) {
-		row, included, err := client.ComposeRow(ctx, []string{ok1.URL, bad.URL, ok2.URL}, 5)
+		dataURIs, included, row, err := client.FetchCandidates(ctx, []string{ok1.URL, bad.URL, ok2.URL}, 5)
 		if err != nil {
-			t.Fatalf("ComposeRow failed: %v", err)
+			t.Fatalf("FetchCandidates failed: %v", err)
 		}
 		if len(included) != 2 || included[0] != ok1.URL || included[1] != ok2.URL {
 			t.Errorf("unexpected included urls: %v", included)
+		}
+		if len(dataURIs) != len(included) {
+			t.Errorf("data URIs = %d, want %d", len(dataURIs), len(included))
 		}
 		img, err := png.Decode(bytes.NewReader(row))
 		if err != nil {
@@ -71,12 +74,15 @@ func TestClientComposeRow(t *testing.T) {
 
 	t.Run("Stops At Limit", func(t *testing.T) {
 		ok3 := serveImage(t, encodePNG(t, solid(120, 80)))
-		row, included, err := client.ComposeRow(ctx, []string{ok1.URL, ok2.URL, ok3.URL}, 2)
+		dataURIs, included, row, err := client.FetchCandidates(ctx, []string{ok1.URL, ok2.URL, ok3.URL}, 2)
 		if err != nil {
-			t.Fatalf("ComposeRow failed: %v", err)
+			t.Fatalf("FetchCandidates failed: %v", err)
 		}
 		if len(included) != 2 || included[0] != ok1.URL || included[1] != ok2.URL {
 			t.Errorf("expected the first two urls, got %v", included)
+		}
+		if len(dataURIs) != len(included) {
+			t.Errorf("data URIs = %d, want %d", len(dataURIs), len(included))
 		}
 		img, err := png.Decode(bytes.NewReader(row))
 		if err != nil {
@@ -88,7 +94,8 @@ func TestClientComposeRow(t *testing.T) {
 	})
 
 	t.Run("All Fetches Fail", func(t *testing.T) {
-		if _, included, err := client.ComposeRow(ctx, []string{bad.URL, bad.URL}, 5); err == nil {
+		if dataURIs, included, _, err := client.FetchCandidates(ctx, []string{bad.URL, bad.URL}, 5); err == nil {
+			_ = dataURIs
 			t.Error("expected error when no images can be fetched")
 		} else if len(included) != 0 {
 			t.Errorf("expected no included urls, got %v", included)

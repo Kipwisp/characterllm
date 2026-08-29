@@ -21,6 +21,7 @@ const (
 	KindAmbient      Kind = "ambient"
 	KindAmbientReply Kind = "ambient_reply"
 	KindAnalysis     Kind = "analysis"
+	KindSourceSelect Kind = "source_select"
 	KindSynthesis    Kind = "synthesis"
 	KindCompaction   Kind = "compaction"
 	KindEdit         Kind = "edit"

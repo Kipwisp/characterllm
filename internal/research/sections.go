@@ -17,6 +17,7 @@ const SectionHeaderPrefix = "### "
 const (
 	SectionIdentity   = "Identity & Temperament"
 	SectionAppearance = "Appearance"
+	SectionRole       = "Role & Relationships"
 	SectionVoice      = "Voice & Habits"
 	SectionDialogue   = "Example Dialogue"
 	SectionScenario   = "Scenario"
@@ -25,7 +26,7 @@ const (
 
 // PersonaSectionOrder lists the always-present persona specification sections
 // in output order.
-var PersonaSectionOrder = []string{SectionIdentity, SectionAppearance, SectionVoice, SectionDialogue, SectionGreeting}
+var PersonaSectionOrder = []string{SectionIdentity, SectionAppearance, SectionRole, SectionVoice, SectionDialogue, SectionGreeting}
 
 // cannedSectionDefinitions holds the format definition for sections that are
 // emitted only conditionally at synthesis time and so are not part of the

@@ -19,6 +19,8 @@ import (
 	"characterllm/internal/logger"
 	"characterllm/internal/prompts"
 	"characterllm/internal/research"
+	"characterllm/internal/safehttp"
+	"characterllm/internal/scrape"
 	"characterllm/internal/search"
 	"characterllm/internal/session"
 )
@@ -41,7 +43,7 @@ func main() {
 	}
 
 	// Load prompt templates; fail fast if any file is missing or unreadable
-	promptSet, err := prompts.Load(cfg.Prompts.SystemPath, cfg.Prompts.CompactionPath, cfg.Prompts.SynthesisPath, cfg.Prompts.AnalyzerPath, cfg.Prompts.EditSectionPath)
+	promptSet, err := prompts.Load(cfg.Prompts.SystemPath, cfg.Prompts.CompactionPath, cfg.Prompts.SynthesisPath, cfg.Prompts.AnalyzerPath, cfg.Prompts.EditSectionPath, cfg.Prompts.SourceSelectPath)
 	if err != nil {
 		slog.Error("failed to load prompt files", "error", err)
 		os.Exit(1)
@@ -49,6 +51,12 @@ func main() {
 
 	// Initialize LLM Client
 	llmClient := llm.NewClient(cfg.LLM.URL, time.Duration(cfg.LLM.TimeoutSeconds)*time.Second)
+	imageTokenEstimate, err := llm.ImageTokenEstimateFor(cfg.Images.MaxImageEdge)
+	if err != nil {
+		slog.Error("invalid IMAGE_MAX_EDGE", "error", err)
+		os.Exit(1)
+	}
+	llmClient.(*llm.OpenAIClient).ImageTokenEstimate = imageTokenEstimate
 
 	// Initialize Session Manager
 	sessionMgr, err := session.NewManager("bot_sessions.db", promptSet.System)
@@ -67,7 +75,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	imageClient := images.NewImageClient(imageSearchProvider, cfg.Images.CacheDir)
+	imageClient := images.NewImageClient(imageSearchProvider, cfg.Images.CacheDir, cfg.Images.MaxImageEdge)
 	if imageClient == nil {
 		slog.Error("failed to initialize image client")
 		os.Exit(1)
@@ -75,7 +83,7 @@ func main() {
 
 	locks := discord.NewConversationLocks()
 
-	synthesizer := research.NewSynthesizer(searchProvider, llmClient, cfg, promptSet)
+	synthesizer := research.NewSynthesizer(searchProvider, llmClient, cfg, promptSet, scrape.New(safehttp.NewFetcher()))
 
 	commandRegistry := commands.New(commands.Deps{
 		Session:     sessionMgr,

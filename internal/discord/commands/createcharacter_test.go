@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"characterllm/internal/audit"
 	"characterllm/internal/research"
@@ -37,7 +38,7 @@ func TestCreateCharacterCmd_NewCharacter_Success(t *testing.T) {
 				Series:       "Series Name",
 			}, "analysis reasoning", "raw response", nil
 		},
-		FetchCharacterFn: func(ctx context.Context, analysis *research.AnalysisResult, imageURIs []string, candidateCount int) (*research.SynthesisResult, error) {
+		FetchCharacterFn: func(ctx context.Context, analysis *research.AnalysisResult, avatarDataURIs []string) (*research.SynthesisResult, error) {
 			return &research.SynthesisResult{
 				Status:       research.SynthesisStatusOK,
 				PersonaSpec:  personaSpec,
@@ -195,7 +196,7 @@ func TestCreateCharacterCmd_SynthesisFailures(t *testing.T) {
 						DisplayName:  "Display",
 					}, "reasoning", "raw", nil
 				},
-				FetchCharacterFn: func(ctx context.Context, analysis *research.AnalysisResult, imageURIs []string, candidateCount int) (*research.SynthesisResult, error) {
+				FetchCharacterFn: func(ctx context.Context, analysis *research.AnalysisResult, avatarDataURIs []string) (*research.SynthesisResult, error) {
 					return &research.SynthesisResult{
 						Status:      tt.status,
 						Ambiguities: tt.ambiguities,
@@ -277,7 +278,7 @@ func TestCreateCharacterCmd_ImageSearchFailures(t *testing.T) {
 						DisplayName:  "Display Name",
 					}, "reasoning", "raw", nil
 				},
-				FetchCharacterFn: func(ctx context.Context, analysis *research.AnalysisResult, imageURIs []string, candidateCount int) (*research.SynthesisResult, error) {
+				FetchCharacterFn: func(ctx context.Context, analysis *research.AnalysisResult, avatarDataURIs []string) (*research.SynthesisResult, error) {
 					return &research.SynthesisResult{
 						Status:      research.SynthesisStatusOK,
 						PersonaSpec: "Persona",
@@ -438,7 +439,7 @@ func TestHandleSetCharacterImage_Success(t *testing.T) {
 	}
 }
 
-func runCreateCharacterWithImages(t *testing.T, cmdCtx *testDeps, s *mockDiscordSession, searchFn func(ctx context.Context, query string, limit int) ([]search.Image, error), composeFn func(ctx context.Context, urls []string, limit int) ([]byte, []string, error)) *discordgo.WebhookEdit {
+func runCreateCharacterWithImages(t *testing.T, cmdCtx *testDeps, s *mockDiscordSession, searchFn func(ctx context.Context, query string, limit int) ([]search.Image, error), fetchFn func(ctx context.Context, urls []string, limit int) ([]string, []string, []byte, error)) *discordgo.WebhookEdit {
 	t.Helper()
 	mockSynth := &mockSynthesizer{
 		AnalyzeInputFn: func(ctx context.Context, input string) (*research.AnalysisResult, string, string, error) {
@@ -448,7 +449,7 @@ func runCreateCharacterWithImages(t *testing.T, cmdCtx *testDeps, s *mockDiscord
 				DisplayName:  "Display Name",
 			}, "reasoning", "raw", nil
 		},
-		FetchCharacterFn: func(ctx context.Context, analysis *research.AnalysisResult, imageURIs []string, candidateCount int) (*research.SynthesisResult, error) {
+		FetchCharacterFn: func(ctx context.Context, analysis *research.AnalysisResult, avatarDataURIs []string) (*research.SynthesisResult, error) {
 			return &research.SynthesisResult{
 				Status:      research.SynthesisStatusOK,
 				PersonaSpec: "Persona",
@@ -457,8 +458,8 @@ func runCreateCharacterWithImages(t *testing.T, cmdCtx *testDeps, s *mockDiscord
 	}
 	cmdCtx.Synthesizer = mockSynth
 	cmdCtx.ImageClient = &mockImageClient{
-		SearchImagesFn: searchFn,
-		ComposeRowFn:   composeFn,
+		SearchImagesFn:    searchFn,
+		FetchCandidatesFn: fetchFn,
 	}
 
 	var edit *discordgo.WebhookEdit
@@ -501,9 +502,9 @@ func TestCreateCharacterCmd_AvatarOptionsRow(t *testing.T) {
 				{URL: "http://c", Title: "C"},
 			}, nil
 		},
-		func(ctx context.Context, urls []string, limit int) ([]byte, []string, error) {
+		func(ctx context.Context, urls []string, limit int) ([]string, []string, []byte, error) {
 			// Simulate the third candidate failing to fetch.
-			return []byte("fake-png"), urls[:2], nil
+			return []string{"data:image/png;base64,a", "data:image/png;base64,b"}, urls[:2], []byte("fake-png"), nil
 		},
 	)
 
@@ -547,8 +548,8 @@ func TestCreateCharacterCmd_ComposeFailureFallsBackToPlainMessage(t *testing.T) 
 		func(ctx context.Context, query string, limit int) ([]search.Image, error) {
 			return []search.Image{{URL: "http://a", Title: "A"}}, nil
 		},
-		func(ctx context.Context, urls []string, limit int) ([]byte, []string, error) {
-			return nil, nil, fmt.Errorf("no images could be fetched")
+		func(ctx context.Context, urls []string, limit int) ([]string, []string, []byte, error) {
+			return nil, nil, nil, fmt.Errorf("no images could be fetched")
 		},
 	)
 
@@ -582,13 +583,12 @@ func findSelectMenu(t *testing.T, components []discordgo.MessageComponent) *disc
 
 // runCreateCharacterWithModelPick runs /createcharacter with the model-pick
 // config flags and a synthesis that returns the given AvatarChoice.
-func runCreateCharacterWithModelPick(t *testing.T, cmdCtx *testDeps, s *mockDiscordSession, modelPick, vision bool, avatarChoice int) (*discordgo.WebhookEdit, []string, int) {
+func runCreateCharacterWithModelPick(t *testing.T, cmdCtx *testDeps, s *mockDiscordSession, modelPick, vision bool, avatarChoice int) (*discordgo.WebhookEdit, []string) {
 	t.Helper()
 	cmdCtx.Config.LLM.AvatarPick = modelPick
 	cmdCtx.Config.LLM.Vision = vision
 
 	var gotImages []string
-	var gotCount int
 	cmdCtx.Synthesizer = &mockSynthesizer{
 		AnalyzeInputFn: func(ctx context.Context, input string) (*research.AnalysisResult, string, string, error) {
 			return &research.AnalysisResult{
@@ -597,18 +597,21 @@ func runCreateCharacterWithModelPick(t *testing.T, cmdCtx *testDeps, s *mockDisc
 				DisplayName:  "Display Name",
 			}, "reasoning", "raw", nil
 		},
-		FetchCharacterFn: func(ctx context.Context, analysis *research.AnalysisResult, imageURIs []string, candidateCount int) (*research.SynthesisResult, error) {
-			gotImages = imageURIs
-			gotCount = candidateCount
+		FetchCharacterFn: func(ctx context.Context, analysis *research.AnalysisResult, avatarDataURIs []string) (*research.SynthesisResult, error) {
+			gotImages = avatarDataURIs
 			raw := "Persona"
 			if avatarChoice > 0 {
 				raw = fmt.Sprintf("AVATAR: %d\n%s", avatarChoice, "Persona")
 			}
 			return &research.SynthesisResult{
-				Status:       research.SynthesisStatusOK,
-				PersonaSpec:  "Persona",
-				AvatarChoice: avatarChoice,
-				RawResponse:  raw,
+				Status:          research.SynthesisStatusOK,
+				PersonaSpec:     "Persona",
+				AvatarChoice:    avatarChoice,
+				RawResponse:     raw,
+				SelectPrompt:    "Source select prompt marker",
+				SelectResponse:  "PICK: 1\nAVATARS: 1,2",
+				SelectLatency:   time.Second,
+				SynthesisPrompt: "Rendered synthesis prompt marker",
 			}, nil
 		},
 	}
@@ -616,8 +619,8 @@ func runCreateCharacterWithModelPick(t *testing.T, cmdCtx *testDeps, s *mockDisc
 		SearchImagesFn: func(ctx context.Context, query string, limit int) ([]search.Image, error) {
 			return []search.Image{{URL: "http://a", Title: "A"}, {URL: "http://b", Title: "B"}}, nil
 		},
-		ComposeRowFn: func(ctx context.Context, urls []string, limit int) ([]byte, []string, error) {
-			return []byte("fake-png"), urls, nil
+		FetchCandidatesFn: func(ctx context.Context, urls []string, limit int) ([]string, []string, []byte, error) {
+			return []string{"data:image/png;base64,a", "data:image/png;base64,b"}, urls, []byte("fake-png"), nil
 		},
 		SaveImageFn: func(ctx context.Context, guildID, characterID, url string) (string, error) {
 			return "/tmp/img.jpg", nil
@@ -650,7 +653,7 @@ func runCreateCharacterWithModelPick(t *testing.T, cmdCtx *testDeps, s *mockDisc
 	if err := cmd.Execute(context.Background(), s, i); err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
-	return edit, gotImages, gotCount
+	return edit, gotImages
 }
 
 func TestCreateCharacterCmd_ModelPickApplied(t *testing.T) {
@@ -666,13 +669,10 @@ func TestCreateCharacterCmd_ModelPickApplied(t *testing.T) {
 		return nil
 	}
 
-	edit, gotImages, gotCount := runCreateCharacterWithModelPick(t, cmdCtx, s, true, true, 2)
+	edit, gotImages := runCreateCharacterWithModelPick(t, cmdCtx, s, true, true, 2)
 
-	if len(gotImages) != 1 || !strings.HasPrefix(gotImages[0], "data:image/png;base64,") {
-		t.Errorf("expected the composed row as a single png data URI, got %v", gotImages)
-	}
-	if gotCount != 2 {
-		t.Errorf("expected candidate count 2 on the synthesis call, got %d", gotCount)
+	if len(gotImages) != 2 || !strings.HasPrefix(gotImages[0], "data:image/png;base64,") {
+		t.Errorf("expected the individual candidate data URIs on the synthesis call, got %v", gotImages)
 	}
 	if capturedAvatar != "data:image/jpeg;base64,abc" {
 		t.Errorf("expected the guild avatar to be updated with the cached image, got %q", capturedAvatar)
@@ -698,6 +698,15 @@ func TestCreateCharacterCmd_ModelPickApplied(t *testing.T) {
 	if !auditDirContains(t, auditDir, "AVATAR: 2") {
 		t.Error("expected the synthesis audit entry to log the model's AVATAR line")
 	}
+	if !auditDirContains(t, auditDir, "source_select") {
+		t.Error("expected a source_select audit entry")
+	}
+	if !auditDirContains(t, auditDir, "Source select prompt marker") {
+		t.Error("expected the source_select audit entry to carry the rendered prompt")
+	}
+	if !auditDirContains(t, auditDir, "Rendered synthesis prompt marker") {
+		t.Error("expected the synthesis audit entry to carry the verbatim rendered prompt")
+	}
 }
 
 // auditDirContains reports whether any audit file in dir contains s.
@@ -719,6 +728,73 @@ func auditDirContains(t *testing.T, dir, s string) bool {
 	return false
 }
 
+func TestCreateCharacterCmd_ModelPickRespectsPreFilter(t *testing.T) {
+	cmdCtx, s, dbPath := setupCommandTest(t)
+	defer os.Remove(dbPath)
+
+	cmdCtx.Config.LLM.AvatarPick = true
+	cmdCtx.Config.LLM.Vision = true
+
+	cmdCtx.Synthesizer = &mockSynthesizer{
+		AnalyzeInputFn: func(ctx context.Context, input string) (*research.AnalysisResult, string, string, error) {
+			return &research.AnalysisResult{
+				Status:       research.AnalysisStatusOK,
+				OfficialName: "Official",
+				DisplayName:  "Display Name",
+			}, "reasoning", "raw", nil
+		},
+		FetchCharacterFn: func(ctx context.Context, analysis *research.AnalysisResult, avatarDataURIs []string) (*research.SynthesisResult, error) {
+			// The pre-filter kept only candidate 2; the pick is 1 within the
+			// kept list, i.e. the second original candidate.
+			return &research.SynthesisResult{
+				Status:       research.SynthesisStatusOK,
+				PersonaSpec:  "Persona",
+				AvatarKept:   []int{2},
+				AvatarChoice: 1,
+			}, nil
+		},
+	}
+	cmdCtx.ImageClient = &mockImageClient{
+		SearchImagesFn: func(ctx context.Context, query string, limit int) ([]search.Image, error) {
+			return []search.Image{{URL: "http://a", Title: "A"}, {URL: "http://b", Title: "B"}}, nil
+		},
+		FetchCandidatesFn: func(ctx context.Context, urls []string, limit int) ([]string, []string, []byte, error) {
+			return []string{"data:image/png;base64,a", "data:image/png;base64,b"}, urls, []byte("fake-png"), nil
+		},
+		SaveImageFn: func(ctx context.Context, guildID, characterID, url string) (string, error) {
+			return "/tmp/img.jpg", nil
+		},
+		ImageToBase64Fn: func(ctx context.Context, path string) (string, error) {
+			return "data:image/jpeg;base64,abc", nil
+		},
+	}
+
+	i := &discordgo.InteractionCreate{
+		Interaction: &discordgo.Interaction{
+			Type: discordgo.InteractionApplicationCommand,
+			Data: discordgo.ApplicationCommandInteractionData{
+				Options: []*discordgo.ApplicationCommandInteractionDataOption{
+					{Name: "description", Value: "Character Name", Type: discordgo.ApplicationCommandOptionString},
+				},
+			},
+		},
+	}
+	i.GuildID = "guild1"
+
+	cmd := &createCharacterCmd{session: cmdCtx.Session, imageClient: cmdCtx.ImageClient, synthesizer: cmdCtx.Synthesizer, audit: cmdCtx.Audit, config: cmdCtx.Config}
+	if err := cmd.Execute(context.Background(), s, i); err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+
+	details, err := cmdCtx.Session.GetCharacterDetails(context.Background(), "guild1")
+	if err != nil || details == nil {
+		t.Fatalf("expected active character details: %v", err)
+	}
+	if details.ImageURL != "http://b" {
+		t.Errorf("expected the pick to index the pre-filtered list (http://b), got %q", details.ImageURL)
+	}
+}
+
 func TestCreateCharacterCmd_ModelPickNoChoiceFallsBackToMenu(t *testing.T) {
 	cmdCtx, s, dbPath := setupCommandTest(t)
 	defer os.Remove(dbPath)
@@ -729,10 +805,10 @@ func TestCreateCharacterCmd_ModelPickNoChoiceFallsBackToMenu(t *testing.T) {
 		return nil
 	}
 
-	edit, gotImages, _ := runCreateCharacterWithModelPick(t, cmdCtx, s, true, true, 0)
+	edit, gotImages := runCreateCharacterWithModelPick(t, cmdCtx, s, true, true, 0)
 
-	if len(gotImages) != 1 {
-		t.Errorf("expected the row image on the synthesis call, got %v", gotImages)
+	if len(gotImages) != 2 {
+		t.Errorf("expected the candidate images on the synthesis call, got %v", gotImages)
 	}
 	if avatarCalls != 0 {
 		t.Error("expected no guild avatar update when the model makes no pick")
@@ -761,7 +837,7 @@ func TestCreateCharacterCmd_ModelPickOutOfRangeFallsBackToMenu(t *testing.T) {
 		return nil
 	}
 
-	edit, _, _ := runCreateCharacterWithModelPick(t, cmdCtx, s, true, true, 5)
+	edit, _ := runCreateCharacterWithModelPick(t, cmdCtx, s, true, true, 5)
 
 	if avatarCalls != 0 {
 		t.Error("expected no guild avatar update for an out-of-range pick")
@@ -784,7 +860,7 @@ func TestCreateCharacterCmd_ModelPickDisabledSendsNoImages(t *testing.T) {
 
 	// The synthesizer may still report a pick, but without images on the
 	// call it must be ignored.
-	edit, gotImages, _ := runCreateCharacterWithModelPick(t, cmdCtx, s, false, true, 2)
+	edit, gotImages := runCreateCharacterWithModelPick(t, cmdCtx, s, false, true, 2)
 
 	if len(gotImages) != 0 {
 		t.Errorf("expected no images on the synthesis call when model pick is disabled, got %v", gotImages)
@@ -810,7 +886,7 @@ func TestCreateCharacterCmd_VisionDisabledFallsBackToMenu(t *testing.T) {
 		return nil
 	}
 
-	edit, gotImages, _ := runCreateCharacterWithModelPick(t, cmdCtx, s, true, false, 2)
+	edit, gotImages := runCreateCharacterWithModelPick(t, cmdCtx, s, true, false, 2)
 
 	if len(gotImages) != 0 {
 		t.Errorf("expected no images on the synthesis call when vision is disabled, got %v", gotImages)
@@ -841,7 +917,7 @@ func TestCreateCharacterCmd_UsesGreetingAsFirstMessage(t *testing.T) {
 				DisplayName:  "Display Name",
 			}, "reasoning", "raw", nil
 		},
-		FetchCharacterFn: func(ctx context.Context, analysis *research.AnalysisResult, imageURIs []string, candidateCount int) (*research.SynthesisResult, error) {
+		FetchCharacterFn: func(ctx context.Context, analysis *research.AnalysisResult, avatarDataURIs []string) (*research.SynthesisResult, error) {
 			return &research.SynthesisResult{Status: research.SynthesisStatusOK, PersonaSpec: personaSpec}, nil
 		},
 	}
@@ -895,7 +971,7 @@ func TestCreateCharacterCmd_ImageSearchQueryIncludesSeries(t *testing.T) {
 				Series:       "Some Show",
 			}, "reasoning", "raw", nil
 		},
-		FetchCharacterFn: func(ctx context.Context, analysis *research.AnalysisResult, imageURIs []string, candidateCount int) (*research.SynthesisResult, error) {
+		FetchCharacterFn: func(ctx context.Context, analysis *research.AnalysisResult, avatarDataURIs []string) (*research.SynthesisResult, error) {
 			return &research.SynthesisResult{Status: research.SynthesisStatusOK, PersonaSpec: "Persona"}, nil
 		},
 	}

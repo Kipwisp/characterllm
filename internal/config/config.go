@@ -47,11 +47,12 @@ type LLMConfig struct {
 }
 
 type PromptConfig struct {
-	SystemPath      string
-	CompactionPath  string
-	SynthesisPath   string
-	AnalyzerPath    string
-	EditSectionPath string
+	SystemPath       string
+	CompactionPath   string
+	SynthesisPath    string
+	AnalyzerPath     string
+	EditSectionPath  string
+	SourceSelectPath string
 }
 
 type SearchConfig struct {
@@ -64,6 +65,12 @@ type SearchConfig struct {
 
 type ImageConfig struct {
 	CacheDir string
+	// MaxImageEdge caps the long edge (in pixels) of processed images.
+	// Loaded via getEnvPositiveInt, so it is always positive.
+	MaxImageEdge int
+	// MaxImageSearchResults bounds the number of image candidates searched
+	// per character.
+	MaxImageSearchResults int
 }
 
 type InviteConfig struct {
@@ -108,31 +115,34 @@ func LoadConfig() *Config {
 		LLM: LLMConfig{
 			URL:                 getEnv("LLM_URL", "http://localhost:8080/v1/chat/completions"),
 			Model:               getEnv("LLM_MODEL", ""),
-			MaxRetries:          getEnvInt("LLM_MAX_RETRIES", 2),
-			MaxContext:          getEnvInt("LLM_MAX_CONTEXT", 10000),
-			CompactionThreshold: getEnvFloat("LLM_COMPACTION_THRESHOLD", 0.9),
-			RecentMemoryWindow:  getEnvInt("LLM_RECENT_MEMORY_WINDOW", 15),
-			SummaryMaxTokens:    getEnvInt("LLM_SUMMARY_MAX_TOKENS", 2048),
-			TimeoutSeconds:      getEnvInt("LLM_TIMEOUT_SECONDS", 120),
+			MaxRetries:          getEnvPositiveInt("LLM_MAX_RETRIES", 2),
+			MaxContext:          getEnvPositiveInt("LLM_MAX_CONTEXT", 10000),
+			CompactionThreshold: getEnvFloatClamped("LLM_COMPACTION_THRESHOLD", 0.9, 0, 1),
+			RecentMemoryWindow:  getEnvPositiveInt("LLM_RECENT_MEMORY_WINDOW", 15),
+			SummaryMaxTokens:    getEnvPositiveInt("LLM_SUMMARY_MAX_TOKENS", 2048),
+			TimeoutSeconds:      getEnvPositiveInt("LLM_TIMEOUT_SECONDS", 120),
 			Vision:              getEnvBool("LLM_VISION", false),
-			MaxImages:           getEnvInt("LLM_MAX_IMAGES", 2),
+			MaxImages:           getEnvPositiveInt("LLM_MAX_IMAGES", 2),
 			AvatarPick:          getEnvBool("LLM_AVATAR_PICK", false),
 		},
 		Prompts: PromptConfig{
-			SystemPath:      getEnv("SYSTEM_PROMPT_PATH", "prompts/system_prompt.md"),
-			CompactionPath:  getEnv("COMPACTION_PROMPT_PATH", "prompts/compaction_prompt.md"),
-			SynthesisPath:   getEnv("SYNTHESIS_PROMPT_PATH", "prompts/synthesis_prompt.md"),
-			AnalyzerPath:    getEnv("ANALYZER_PROMPT_PATH", "prompts/analyzer_prompt.md"),
-			EditSectionPath: getEnv("EDIT_SECTION_PROMPT_PATH", "prompts/edit_section_prompt.md"),
+			SystemPath:       getEnv("SYSTEM_PROMPT_PATH", "prompts/system_prompt.md"),
+			CompactionPath:   getEnv("COMPACTION_PROMPT_PATH", "prompts/compaction_prompt.md"),
+			SynthesisPath:    getEnv("SYNTHESIS_PROMPT_PATH", "prompts/synthesis_prompt.md"),
+			AnalyzerPath:     getEnv("ANALYZER_PROMPT_PATH", "prompts/analyzer_prompt.md"),
+			EditSectionPath:  getEnv("EDIT_SECTION_PROMPT_PATH", "prompts/edit_section_prompt.md"),
+			SourceSelectPath: getEnv("SOURCE_SELECT_PROMPT_PATH", "prompts/source_select_prompt.md"),
 		},
 		Search: SearchConfig{
 			Provider:       getEnv("SEARCH_PROVIDER", "searxng"),
 			SearXNGURL:     getEnv("SEARXNG_URL", "http://localhost:8080"),
 			SearXNGEngines: getEnv("SEARXNG_ENGINES", ""),
-			MaxResults:     getEnvInt("MAX_SEARCH_RESULTS", 3),
+			MaxResults:     getEnvPositiveInt("MAX_SEARCH_RESULTS", 5),
 		},
 		Images: ImageConfig{
-			CacheDir: getEnv("IMAGE_CACHE_DIR", "images/cache"),
+			CacheDir:              getEnv("IMAGE_CACHE_DIR", "images/cache"),
+			MaxImageEdge:          getEnvPositiveInt("IMAGE_MAX_EDGE", 512),
+			MaxImageSearchResults: getEnvPositiveInt("MAX_IMAGE_SEARCH_RESULTS", 10),
 		},
 		Invite: InviteConfig{
 			CommandEnabled: getEnvBool("INVITE_COMMAND_ENABLED", true),
@@ -149,21 +159,14 @@ func LoadConfig() *Config {
 func loadAmbientConfig() AmbientConfig {
 	c := AmbientConfig{
 		Enabled:          getEnvBool("AMBIENT_ENABLED", true),
-		MinSeconds:       getEnvInt("AMBIENT_MIN_SECONDS", 14400),
-		MaxSeconds:       getEnvInt("AMBIENT_MAX_SECONDS", 21600),
-		ReplyCount:       getEnvInt("AMBIENT_REPLY_COUNT", 5),
-		TickProbability:  getEnvFloat("AMBIENT_TICK_PROBABILITY", 0.5),
-		ReplyProbability: getEnvFloat("AMBIENT_REPLY_PROBABILITY", 0.1),
+		MinSeconds:       getEnvPositiveInt("AMBIENT_MIN_SECONDS", 14400),
+		MaxSeconds:       getEnvPositiveInt("AMBIENT_MAX_SECONDS", 21600),
+		ReplyCount:       getEnvPositiveInt("AMBIENT_REPLY_COUNT", 5),
+		TickProbability:  getEnvFloatClamped("AMBIENT_TICK_PROBABILITY", 0.5, 0, 1),
+		ReplyProbability: getEnvFloatClamped("AMBIENT_REPLY_PROBABILITY", 0.1, 0, 1),
 	}
 	if c.MaxSeconds < c.MinSeconds {
 		c.MaxSeconds = c.MinSeconds
-	}
-	for _, p := range []*float64{&c.TickProbability, &c.ReplyProbability} {
-		if *p < 0 {
-			*p = 0
-		} else if *p > 1 {
-			*p = 1
-		}
 	}
 	return c
 }
@@ -185,6 +188,28 @@ func getEnvInt(key string, fallback int) int {
 		return fallback
 	}
 	return i
+}
+
+// getEnvPositiveInt is like getEnvInt but also falls back when the value is
+// not a positive number.
+func getEnvPositiveInt(key string, fallback int) int {
+	i := getEnvInt(key, fallback)
+	if i <= 0 {
+		return fallback
+	}
+	return i
+}
+
+// getEnvFloatClamped is like getEnvFloat but clamps the value to [min, max].
+func getEnvFloatClamped(key string, fallback, min, max float64) float64 {
+	f := getEnvFloat(key, fallback)
+	if f < min {
+		return min
+	}
+	if f > max {
+		return max
+	}
+	return f
 }
 
 func getEnvFloat(key string, fallback float64) float64 {

@@ -19,6 +19,8 @@ const (
 	downloadTimeout = 15 * time.Second
 	// dnsTimeout bounds hostname resolution during URL validation.
 	dnsTimeout = 5 * time.Second
+	// defaultUserAgent identifies the bot to servers.
+	defaultUserAgent = "Mozilla/5.0 (compatible; characterllm/1.0)"
 )
 
 // Fetcher downloads URLs under a strict security policy.
@@ -27,6 +29,9 @@ type Fetcher struct {
 	// validated address) and the original host for the Host header and TLS
 	// SNI. Defaults to the built-in https-only SSRF policy.
 	Validate func(ctx context.Context, raw string) (dialURL, host string, err error)
+	// UserAgent overrides the User-Agent header sent with every request.
+	// Empty uses defaultUserAgent.
+	UserAgent string
 }
 
 // NewFetcher returns a Fetcher using the built-in policy.
@@ -51,6 +56,11 @@ func (f *Fetcher) Get(ctx context.Context, raw string) (*http.Response, error) {
 		return nil, err
 	}
 	req.Host = host
+	ua := f.UserAgent
+	if ua == "" {
+		ua = defaultUserAgent
+	}
+	req.Header.Set("User-Agent", ua)
 
 	client := &http.Client{
 		Timeout: downloadTimeout,

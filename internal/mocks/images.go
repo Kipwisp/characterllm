@@ -10,14 +10,14 @@ import (
 
 // MockImageClient is a configurable test double for images.ImageClient.
 type MockImageClient struct {
-	SearchImagesFn   func(ctx context.Context, query string, limit int) ([]search.Image, error)
-	SaveImageFn      func(ctx context.Context, guildID, characterID, url string) (string, error)
-	GetImageFn       func(guildID, characterID string) (string, error)
-	ImageToBase64Fn  func(ctx context.Context, path string) (string, error)
-	ImageToDataURIFn func(ctx context.Context, url string) (string, error)
-	ComposeRowFn     func(ctx context.Context, urls []string, limit int) ([]byte, []string, error)
-	DeleteImageFn    func(guildID, characterID string) error
-	GetCacheFn       func() *images.ImageCache
+	SearchImagesFn    func(ctx context.Context, query string, limit int) ([]search.Image, error)
+	SaveImageFn       func(ctx context.Context, guildID, characterID, url string) (string, error)
+	GetImageFn        func(guildID, characterID string) (string, error)
+	ImageToBase64Fn   func(ctx context.Context, path string) (string, error)
+	ImageToDataURIFn  func(ctx context.Context, url string) (string, error)
+	FetchCandidatesFn func(ctx context.Context, urls []string, limit int) ([]string, []string, []byte, error)
+	DeleteImageFn     func(guildID, characterID string) error
+	GetCacheFn        func() *images.ImageCache
 }
 
 func (m *MockImageClient) SearchImages(ctx context.Context, query string, limit int) ([]search.Image, error) {
@@ -55,11 +55,11 @@ func (m *MockImageClient) ImageToDataURI(ctx context.Context, url string) (strin
 	return m.ImageToDataURIFn(ctx, url)
 }
 
-func (m *MockImageClient) ComposeRow(ctx context.Context, urls []string, limit int) ([]byte, []string, error) {
-	if m.ComposeRowFn == nil {
-		return nil, nil, nil
+func (m *MockImageClient) FetchCandidates(ctx context.Context, urls []string, limit int) ([]string, []string, []byte, error) {
+	if m.FetchCandidatesFn == nil {
+		return nil, nil, nil, nil
 	}
-	return m.ComposeRowFn(ctx, urls, limit)
+	return m.FetchCandidatesFn(ctx, urls, limit)
 }
 
 func (m *MockImageClient) DeleteImage(guildID, characterID string) error {

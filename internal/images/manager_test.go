@@ -26,7 +26,7 @@ func TestNewImageClient(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	provider := &search.SearXNGProvider{URL: "http://localhost:8080"}
-	client := NewImageClient(provider, tmpDir)
+	client := NewImageClient(provider, tmpDir, 0)
 
 	if client == nil {
 		t.Fatal("NewImageClient returned nil")
@@ -43,7 +43,7 @@ func TestClientSaveImage(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	client := &Client{Cache: NewImageCache(tmpDir), Fetcher: safehttp.NewFetcher()}
+	client := &Client{Cache: NewImageCache(tmpDir), Fetcher: safehttp.NewFetcher(), MaxImageEdge: testMaxImageEdge}
 	// The local test servers bind to loopback http, which the safehttp
 	// policy rejects; bypass the check for the download mechanics tests.
 	client.Fetcher.Validate = func(ctx context.Context, raw string) (string, string, error) {
@@ -61,8 +61,25 @@ func TestClientSaveImage(t *testing.T) {
 		return server
 	}
 
+	// A real PNG with a transparent pixel: it survives processImage and
+	// keeps the .png extension.
+	realPNG := func() []byte {
+		src := image.NewNRGBA(image.Rect(0, 0, 32, 32))
+		for y := 0; y < 32; y++ {
+			for x := 0; x < 32; x++ {
+				src.SetNRGBA(x, y, color.NRGBA{uint8(x), uint8(y), 128, 255})
+			}
+		}
+		src.SetNRGBA(16, 16, color.NRGBA{0, 0, 0, 0})
+		var buf bytes.Buffer
+		if err := png.Encode(&buf, src); err != nil {
+			t.Fatal(err)
+		}
+		return buf.Bytes()
+	}
+
 	t.Run("Saves Downloaded Image", func(t *testing.T) {
-		path, err := client.SaveImage(ctx, "g", "c", serve(t, pngBytes).URL)
+		path, err := client.SaveImage(ctx, "g", "c", serve(t, realPNG()).URL)
 		if err != nil {
 			t.Fatalf("SaveImage failed: %v", err)
 		}
@@ -110,6 +127,12 @@ func TestClientSaveImage(t *testing.T) {
 		}
 	})
 
+	t.Run("Undecodable Image Rejected", func(t *testing.T) {
+		if _, err := client.SaveImage(ctx, "g", "c", serve(t, pngBytes).URL); err == nil || !strings.Contains(err.Error(), "does not decode") {
+			t.Errorf("expected decode rejection, got %v", err)
+		}
+	})
+
 	t.Run("Non-Image Content Rejected", func(t *testing.T) {
 		if _, err := client.SaveImage(ctx, "g", "c", serve(t, []byte("hello world, definitely not an image")).URL); err == nil || !strings.Contains(err.Error(), "recognized image") {
 			t.Errorf("expected magic-byte rejection, got %v", err)
@@ -124,7 +147,7 @@ func TestClientImageToDataURI(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	client := &Client{Cache: NewImageCache(tmpDir), Fetcher: safehttp.NewFetcher()}
+	client := &Client{Cache: NewImageCache(tmpDir), Fetcher: safehttp.NewFetcher(), MaxImageEdge: testMaxImageEdge}
 	client.Fetcher.Validate = func(ctx context.Context, raw string) (string, string, error) {
 		return raw, "localhost", nil
 	}
@@ -162,8 +185,8 @@ func TestClientImageToDataURI(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if cfg.Width != maxImageEdge || cfg.Height != 384 {
-			t.Errorf("expected %dx384, got %dx%d", maxImageEdge, cfg.Width, cfg.Height)
+		if cfg.Width != testMaxImageEdge || cfg.Height != 384 {
+			t.Errorf("expected %dx384, got %dx%d", testMaxImageEdge, cfg.Width, cfg.Height)
 		}
 	})
 

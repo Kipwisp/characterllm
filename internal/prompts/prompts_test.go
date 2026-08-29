@@ -21,12 +21,13 @@ func TestLoad(t *testing.T) {
 	synthesis := writeTempPrompt(t, "synthesis.md", "syn")
 	analyzer := writeTempPrompt(t, "analyzer.md", "ana")
 	editSection := writeTempPrompt(t, "edit_section.md", "edit")
+	sourceSelect := writeTempPrompt(t, "source_select.md", "sel")
 
-	set, err := Load(system, compaction, synthesis, analyzer, editSection)
+	set, err := Load(system, compaction, synthesis, analyzer, editSection, sourceSelect)
 	if err != nil {
 		t.Fatalf("Load failed: %v", err)
 	}
-	if set.System != "sys" || set.Compaction != "cmp" || set.Synthesis != "syn" || set.Analyzer != "ana" || set.EditSection != "edit" {
+	if set.System != "sys" || set.Compaction != "cmp" || set.Synthesis != "syn" || set.Analyzer != "ana" || set.EditSection != "edit" || set.SourceSelect != "sel" {
 		t.Errorf("unexpected prompt set: %+v", set)
 	}
 }
@@ -34,7 +35,7 @@ func TestLoad(t *testing.T) {
 func TestLoad_MissingFile(t *testing.T) {
 	system := writeTempPrompt(t, "system.md", "sys")
 
-	_, err := Load(system, "/nonexistent/compaction.md", system, system, system)
+	_, err := Load(system, "/nonexistent/compaction.md", system, system, system, system)
 	if err == nil {
 		t.Fatal("expected error for missing prompt file")
 	}
