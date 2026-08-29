@@ -238,7 +238,7 @@ func TestHandleMessageCreate_ImageNotesStrippedAndPersisted(t *testing.T) {
 	}
 
 	llmMock.GenerateResponseFn = func(ctx context.Context, messages []llm.Message, model string) (string, string, error) {
-		return "Nice shot! <image_note>a golden retriever lying on a beach</image_note>", "", nil
+		return "<image_note>a golden retriever lying on a beach</image_note>\nNice shot!", "", nil
 	}
 
 	var sentContent string

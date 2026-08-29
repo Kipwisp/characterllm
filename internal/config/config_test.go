@@ -13,6 +13,7 @@ func TestLoadConfig(t *testing.T) {
 		"LLM_URL", "LLM_MODEL", "LLM_MAX_RETRIES", "LLM_MAX_CONTEXT", "LLM_COMPACTION_THRESHOLD", "LLM_RECENT_MEMORY_WINDOW", "LLM_VISION", "LLM_MAX_IMAGES",
 		"SYSTEM_PROMPT_PATH", "COMPACTION_PROMPT_PATH", "SYNTHESIS_PROMPT_PATH", "ANALYZER_PROMPT_PATH", "EDIT_SECTION_PROMPT_PATH",
 		"SEARCH_PROVIDER", "SEARXNG_URL", "SEARXNG_ENGINES", "MAX_SEARCH_RESULTS", "IMAGE_CACHE_DIR", "IMAGE_MAX_EDGE", "MAX_IMAGE_SEARCH_RESULTS", "LLM_AVATAR_PICK",
+		"RESEARCH_MAX_SOURCE_CHARS",
 		"INVITE_COMMAND_ENABLED",
 		"LOG_LEVEL", "CONVERSATION_LOG", "COMMANDS_ADMIN_ONLY",
 	}
@@ -52,6 +53,7 @@ func TestLoadConfig(t *testing.T) {
 	os.Setenv("SEARXNG_URL", "http://test-searxng")
 	os.Setenv("SEARXNG_ENGINES", "google,bing")
 	os.Setenv("MAX_SEARCH_RESULTS", "10")
+	os.Setenv("RESEARCH_MAX_SOURCE_CHARS", "3000")
 	os.Setenv("IMAGE_CACHE_DIR", "test/cache")
 	os.Setenv("MAX_IMAGE_SEARCH_RESULTS", "7")
 	os.Setenv("IMAGE_MAX_EDGE", "256")
@@ -120,6 +122,9 @@ func TestLoadConfig(t *testing.T) {
 	if cfg.Search.MaxResults != 10 {
 		t.Errorf("Expected MAX_SEARCH_RESULTS 10, got %d", cfg.Search.MaxResults)
 	}
+	if cfg.Research.MaxSourceChars != 3000 {
+		t.Errorf("Expected RESEARCH_MAX_SOURCE_CHARS 3000, got %d", cfg.Research.MaxSourceChars)
+	}
 	if cfg.Images.CacheDir != "test/cache" {
 		t.Errorf("Expected IMAGE_CACHE_DIR test/cache, got %s", cfg.Images.CacheDir)
 	}
@@ -153,6 +158,7 @@ func TestLoadConfigDefaults(t *testing.T) {
 		"LLM_URL", "LLM_MODEL", "LLM_MAX_RETRIES", "LLM_MAX_CONTEXT", "LLM_COMPACTION_THRESHOLD", "LLM_RECENT_MEMORY_WINDOW", "LLM_VISION", "LLM_MAX_IMAGES",
 		"SYSTEM_PROMPT_PATH", "COMPACTION_PROMPT_PATH", "SYNTHESIS_PROMPT_PATH", "ANALYZER_PROMPT_PATH", "EDIT_SECTION_PROMPT_PATH",
 		"SEARCH_PROVIDER", "SEARXNG_URL", "SEARXNG_ENGINES", "MAX_SEARCH_RESULTS", "IMAGE_CACHE_DIR", "IMAGE_MAX_EDGE", "MAX_IMAGE_SEARCH_RESULTS", "LLM_AVATAR_PICK",
+		"RESEARCH_MAX_SOURCE_CHARS",
 		"INVITE_COMMAND_ENABLED",
 		"LOG_LEVEL", "CONVERSATION_LOG", "COMMANDS_ADMIN_ONLY",
 	}
@@ -208,6 +214,9 @@ func TestLoadConfigDefaults(t *testing.T) {
 	}
 	if cfg.Search.MaxResults != 5 {
 		t.Errorf("Expected default MAX_SEARCH_RESULTS 5, got %d", cfg.Search.MaxResults)
+	}
+	if cfg.Research.MaxSourceChars != 0 {
+		t.Errorf("Expected default RESEARCH_MAX_SOURCE_CHARS 0, got %d", cfg.Research.MaxSourceChars)
 	}
 	if cfg.Images.CacheDir != "images/cache" {
 		t.Errorf("Expected default IMAGE_CACHE_DIR, got %s", cfg.Images.CacheDir)

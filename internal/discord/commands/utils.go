@@ -648,7 +648,7 @@ func markChanges(oldText, newText string) string {
 	newTokens := splitSentences(newText)
 	// Steps 2 and 3 cost one table cell and one walk step per token pair,
 	// so bail out for pathologically large inputs and show the plain text.
-	if len(oldTokens) == 0 || len(newTokens) == 0 || len(oldTokens)*len(newTokens) > 1_000_000 {
+	if len(oldTokens)*len(newTokens) > 1_000_000 {
 		return newText
 	}
 
@@ -853,17 +853,25 @@ func runeAt(text string, i int) rune {
 
 // markSpecChanges marks up the diff between two persona specifications
 // section by section, so change spans never cross a "### " header line.
-// Sections present only in newSpec are rendered without markup; sections
-// dropped from the spec do not appear.
+// Sections present only in newSpec are fully underlined; sections dropped
+// from the spec appear with their whole body struck through.
 func markSpecChanges(oldSpec, newSpec string) string {
+	// Index the old spec's bodies by section name so each new
+	// section can be diffed against its old counterpart.
+	oldSections := research.SplitSections(oldSpec)
 	oldBodies := map[string]string{}
-	for _, sec := range research.SplitSections(oldSpec) {
+	for _, sec := range oldSections {
 		if _, ok := oldBodies[sec.Name]; !ok {
 			oldBodies[sec.Name] = sec.Body
 		}
 	}
+
+	// Walk the new spec in order, diffing each section against the
+	// old body.
+	seen := map[string]bool{}
 	var parts []string
 	for _, sec := range research.SplitSections(newSpec) {
+		seen[sec.Name] = true
 		if sec.Name == "" {
 			if sec.Body != "" {
 				parts = append(parts, markChanges(oldBodies[""], sec.Body))
@@ -872,5 +880,19 @@ func markSpecChanges(oldSpec, newSpec string) string {
 		}
 		parts = append(parts, research.SectionHeaderPrefix+sec.Name+"\n"+markChanges(oldBodies[sec.Name], sec.Body))
 	}
+
+	// Append the sections the rewrite dropped with the whole body struck
+	// through.
+	for _, sec := range oldSections {
+		if seen[sec.Name] || sec.Body == "" {
+			continue
+		}
+		if sec.Name == "" {
+			parts = append(parts, markChanges(sec.Body, ""))
+			continue
+		}
+		parts = append(parts, research.SectionHeaderPrefix+sec.Name+"\n"+markChanges(sec.Body, ""))
+	}
+
 	return strings.Join(parts, "\n\n")
 }

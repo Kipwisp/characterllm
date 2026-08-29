@@ -818,10 +818,9 @@ func TestEditCharacterCmd_GeneralRewrite_Overflow(t *testing.T) {
 		Description: currentSpec,
 	})
 
-	// The LLM returns a large spec, so both the marked preview and the
-	// clean confirmation span two messages; Accept must update the earlier
-	// message to its confirmation embeds and the last one (carrying the
-	// buttons) through the callback.
+	// The LLM returns a large spec, so the marked preview spans multiple
+	// messages; Accept must keep the whole card in the channel and turn the
+	// earlier ack into a plain confirmation.
 	var proposedSpec string
 	for i := 0; i < 6; i++ {
 		proposedSpec += "### Section " + string(rune('A'+i)) + "\n" + strings.Repeat("x", 1200) + "\n\n"
@@ -849,7 +848,13 @@ func TestEditCharacterCmd_GeneralRewrite_Overflow(t *testing.T) {
 		deleted = append(deleted, messageID)
 		return nil
 	}
-
+	var buttonEditID string
+	var buttonEdit *discordgo.MessageEdit
+	s.ChannelMessageEditComplexFn = func(channelID, messageID string, edit *discordgo.MessageEdit) (*discordgo.Message, error) {
+		buttonEditID = messageID
+		buttonEdit = edit
+		return nil, nil
+	}
 	var clickType discordgo.InteractionResponseType
 	s.InteractionRespondFn = func(interaction *discordgo.Interaction, response *discordgo.InteractionResponse) error {
 		clickType = response.Type
@@ -894,25 +899,30 @@ func TestEditCharacterCmd_GeneralRewrite_Overflow(t *testing.T) {
 	if !strings.Contains(ackEdits[1].content, "Updated **Overflow Char**: whole persona") {
 		t.Errorf("expected the confirmation on the ack, got %q", ackEdits[1].content)
 	}
-	if len(ackEdits[1].embeds) == 0 {
-		t.Error("expected confirmation embeds on the ack")
+	if len(ackEdits[1].embeds) != 0 {
+		t.Errorf("expected no embeds on the confirmation ack, got %d", len(ackEdits[1].embeds))
 	}
-	// The button click is acknowledged with an ephemeral note.
+	// The button click is acknowledged invisibly.
 	if clickType != discordgo.InteractionResponseDeferredMessageUpdate {
 		t.Errorf("expected an invisible deferred-update acknowledgment, got type %d", clickType)
 	}
-	// Every card message is deleted.
-	for idx := range sends {
-		if !contains(deleted, fmt.Sprintf("ov%d", idx+1)) {
-			t.Errorf("card message ov%d must be deleted, got %v", idx+1, deleted)
-		}
+	// The whole card stays in the channel.
+	if len(deleted) != 0 {
+		t.Errorf("card messages must not be deleted on Accept, got %v", deleted)
+	}
+	// The buttons are stripped from the last card message.
+	if buttonEditID != fmt.Sprintf("ov%d", len(sends)) {
+		t.Errorf("expected the buttons removed from the last card message, got %q", buttonEditID)
+	}
+	if buttonEdit == nil || buttonEdit.Components == nil {
+		t.Error("expected a button-stripping edit on the last card message")
 	}
 }
 
 // TestEditCharacterCmd_OverflowOutcomeOnAck covers the multi-message
-// resolution: the ack is edited to the confirmation and every card message
-// is deleted. The pending entry is injected directly so the scenario is
-// deterministic.
+// resolution: the ack is edited to a plain confirmation and the whole card
+// stays in the channel. The pending entry is injected directly so the
+// scenario is deterministic.
 func TestEditCharacterCmd_OverflowOutcomeOnAck(t *testing.T) {
 	cmdCtx, s, dbPath := setupCommandTest(t)
 	defer os.Remove(dbPath)
@@ -947,6 +957,13 @@ func TestEditCharacterCmd_OverflowOutcomeOnAck(t *testing.T) {
 		deleted = append(deleted, messageID)
 		return nil
 	}
+	var buttonEditID string
+	var buttonEdit *discordgo.MessageEdit
+	s.ChannelMessageEditComplexFn = func(channelID, messageID string, edit *discordgo.MessageEdit) (*discordgo.Message, error) {
+		buttonEditID = messageID
+		buttonEdit = edit
+		return nil, nil
+	}
 	var clickType discordgo.InteractionResponseType
 	s.InteractionRespondFn = func(interaction *discordgo.Interaction, response *discordgo.InteractionResponse) error {
 		clickType = response.Type
@@ -961,16 +978,17 @@ func TestEditCharacterCmd_OverflowOutcomeOnAck(t *testing.T) {
 	if !strings.Contains(ackEdits[0].content, "Updated **Surplus Char**: whole persona") {
 		t.Errorf("expected whole-persona confirmation on the ack, got %q", ackEdits[0].content)
 	}
-	if len(ackEdits[0].embeds) == 0 {
-		t.Error("expected confirmation embeds on the ack")
+	if len(ackEdits[0].embeds) != 0 {
+		t.Errorf("expected no embeds on the confirmation ack, got %d", len(ackEdits[0].embeds))
 	}
 	if clickType != discordgo.InteractionResponseDeferredMessageUpdate {
 		t.Errorf("expected an invisible deferred-update acknowledgment, got type %d", clickType)
 	}
-	for _, id := range []string{"ov1", "ov2", "ov3", "ov4"} {
-		if !contains(deleted, id) {
-			t.Errorf("card message %s must be deleted, got %v", id, deleted)
-		}
+	if len(deleted) != 0 {
+		t.Errorf("card messages must not be deleted on Accept, got %v", deleted)
+	}
+	if buttonEditID != "ov4" || buttonEdit == nil || buttonEdit.Components == nil {
+		t.Errorf("expected the buttons stripped from ov4, got id %q edit %+v", buttonEditID, buttonEdit)
 	}
 }
 

@@ -26,7 +26,8 @@ Following the metadata, you must output the specification exactly in the followi
 ### Role & Relationships
 - **Role/Occupation**: [One line: what the character does in their world (job, title, function).]
 - **Key Abilities**: [2-5 short, established facts about what the character can do.]
-- **Relationships**: [Up to 8, each on their own line, one per clearly related person: "Name — relation; how the character speaks of or reacts to them". The second half is the point: it is behavior, not just a label (e.g., "Snaptrap — rival; she never says his name, only 'that idiot', and stiffens when he is near").]
+- **Relationships**: 
+[Up to 8, each on their own line, one per clearly related person: "Name — relation; how the character speaks of or reacts to them". The second half is the point: it is behavior, not just a label (e.g., "Snaptrap — rival; she never says his name, only 'that idiot', and stiffens when he is near").]
 
 ### Voice & Habits
 [Describe the character's cadence, specific verbal tics, or recurring behaviors. Specify if they use slang, formal language, or have a specific accent.]
@@ -37,6 +38,7 @@ Following the metadata, you must output the specification exactly in the followi
 - **Establish Boundaries**: Include at least one example where the character refuses a request, reacts coldly, or pushes back against the user to establish the "edges" of their personality.
 - **Avoid "Interview Mode"**: Do NOT use a Q&A format. Create natural, scene-based snippets.
 - **Variety**: Show how they speak in different emotional states (e.g., one calm, one agitated).
+- **No Repeated Skeletons**: Vary how each Character line begins — mix different openings, rhythms, and sentence structures so the examples read as separate moments, not one template repeated. At least one example must be pure dialogue with no actions, gestures, or stage directions at all. No two examples may share the same opening pattern or sentence structure, and no single pattern may dominate the section.
 - **Actions**: Surround any physical actions, gestures, or environmental descriptions with asterisks (*sighs and leans back*).
 - **Format**: Do NOT use quotation marks around the dialogue; write the response as raw text (e.g., Character: Hello, not Character: "Hello").
 ]

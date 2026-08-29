@@ -471,10 +471,28 @@ func TestMarkChanges(t *testing.T) {
 			want:    "Line one.\n__Line two.__",
 		},
 		{
-			name:    "empty old text returns new verbatim",
+			name:    "empty old text underlines the whole new text",
 			oldText: "",
 			newText: "Fresh section.",
-			want:    "Fresh section.",
+			want:    "__Fresh section.__",
+		},
+		{
+			name:    "empty old text underlines the multi-line new text",
+			oldText: "",
+			newText: "First line.\nSecond line.",
+			want:    "__First line.__\n__Second line.__",
+		},
+		{
+			name:    "empty new text strikes through the whole old text",
+			oldText: "Gone one. Gone two.",
+			newText: "",
+			want:    "~~Gone one. Gone two.~~",
+		},
+		{
+			name:    "both texts empty",
+			oldText: "",
+			newText: "",
+			want:    "",
 		},
 		{
 			name:    "markdown survives wrapping",
@@ -525,11 +543,26 @@ func TestMarkSpecChanges(t *testing.T) {
 	if !strings.Contains(sections["Appearance"], "__- **Species**: Dragon__") {
 		t.Errorf("appearance section should mark the change: %q", sections["Appearance"])
 	}
-	if strings.Contains(sections["Scenario"], "__") || strings.Contains(sections["Scenario"], "~~") {
-		t.Errorf("new section must be unmarked: %q", sections["Scenario"])
+	if sections["Scenario"] != "__New scene.__" {
+		t.Errorf("new section must be fully underlined, got %q", sections["Scenario"])
 	}
-	if sections["Scenario"] != "New scene." {
-		t.Errorf("new section body = %q", sections["Scenario"])
+}
+
+func TestMarkSpecChanges_DeletedSection(t *testing.T) {
+	oldSpec := "### Identity & Temperament\nCold and questioning.\n\n### Greeting\nHello there.\nHow are you?"
+	newSpec := "### Identity & Temperament\nCold and questioning."
+	got := markSpecChanges(oldSpec, newSpec)
+
+	sections := map[string]string{}
+	for _, sec := range research.SplitSections(got) {
+		sections[sec.Name] = sec.Body
+	}
+	if len(sections) != 2 {
+		t.Fatalf("expected 2 parseable sections, got %+v", sections)
+	}
+	want := "~~Hello there.\nHow are you?~~"
+	if sections["Greeting"] != want {
+		t.Errorf("deleted section must be fully struck through, got %q (want %q)", sections["Greeting"], want)
 	}
 }
 

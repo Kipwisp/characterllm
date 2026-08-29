@@ -1052,3 +1052,44 @@ func TestTruncateToParagraphs(t *testing.T) {
 		}
 	})
 }
+
+func TestBuildSourceBlock_MaxSourceChars(t *testing.T) {
+	newClient := func(maxSourceChars int) *SynthesizerClient {
+		return &SynthesizerClient{
+			config: &config.Config{
+				LLM:      config.LLMConfig{MaxContext: 10000},
+				Research: config.ResearchConfig{MaxSourceChars: maxSourceChars},
+			},
+			prompts: sourceSelectPS(),
+			scraper: &mockScrapeSource{scrapeFn: func(ctx context.Context, url string) (scrape.Source, error) {
+				return scrape.Source{URL: url, Title: "T", Text: strings.Repeat("abcdefghij\n\n", 50)}, nil
+			}},
+		}
+	}
+	picked := &search.SearchResult{Title: "T", URL: "https://x.example"}
+	analysis := &AnalysisResult{OfficialName: "Test Char"}
+
+	t.Run("cap_truncates_the_page", func(t *testing.T) {
+		block := newClient(100).buildSourceBlock(context.Background(), analysis, picked)
+		if !strings.Contains(block, "[…] truncated") {
+			t.Errorf("expected the truncation marker, got %q", block)
+		}
+		if len(block) > 300 {
+			t.Errorf("source block must respect the 100-char cap, got %d chars", len(block))
+		}
+	})
+
+	t.Run("unset_cap_leaves_the_budget_in_charge", func(t *testing.T) {
+		block := newClient(0).buildSourceBlock(context.Background(), analysis, picked)
+		if strings.Contains(block, "[…] truncated") {
+			t.Errorf("page must not be truncated without a cap, got %q", block)
+		}
+	})
+
+	t.Run("cap_above_budget_is_ignored", func(t *testing.T) {
+		block := newClient(1_000_000).buildSourceBlock(context.Background(), analysis, picked)
+		if strings.Contains(block, "[…] truncated") {
+			t.Errorf("a cap above the budget must not truncate, got %q", block)
+		}
+	})
+}

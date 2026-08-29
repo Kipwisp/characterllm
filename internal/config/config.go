@@ -14,6 +14,7 @@ type Config struct {
 	LLM     LLMConfig
 	Prompts PromptConfig
 	Search  SearchConfig
+	Research ResearchConfig
 	Images  ImageConfig
 	Invite  InviteConfig
 	Ambient AmbientConfig
@@ -61,6 +62,13 @@ type SearchConfig struct {
 	SearXNGEngines string
 	// MaxResults bounds the number of search results per query.
 	MaxResults int
+}
+
+type ResearchConfig struct {
+	// MaxSourceChars caps the scraped source page's length (in characters)
+	// included in the synthesis prompt, below the context-derived scrape
+	// budget. Zero leaves the budget as the only cap.
+	MaxSourceChars int
 }
 
 type ImageConfig struct {
@@ -138,6 +146,9 @@ func LoadConfig() *Config {
 			SearXNGURL:     getEnv("SEARXNG_URL", "http://localhost:8080"),
 			SearXNGEngines: getEnv("SEARXNG_ENGINES", ""),
 			MaxResults:     getEnvPositiveInt("MAX_SEARCH_RESULTS", 5),
+		},
+		Research: ResearchConfig{
+			MaxSourceChars: getEnvPositiveInt("RESEARCH_MAX_SOURCE_CHARS", 0),
 		},
 		Images: ImageConfig{
 			CacheDir:              getEnv("IMAGE_CACHE_DIR", "images/cache"),

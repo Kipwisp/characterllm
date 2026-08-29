@@ -187,7 +187,7 @@ func (c *Chat) sendTurnMessage(ctx context.Context, s commands.DiscordSession, c
 var imageNoteRe = regexp.MustCompile(`(?s)<image_note>.*?</image_note>`)
 
 // splitImageNotes separates the <image_note> blocks the model
-// appends for image messages from the user-visible reply.
+// prepends for image messages from the user-visible reply.
 func splitImageNotes(response string) (visible, record string) {
 	notes := imageNoteRe.FindAllStringSubmatch(response, -1)
 	visible = strings.TrimSpace(imageNoteRe.ReplaceAllString(response, ""))

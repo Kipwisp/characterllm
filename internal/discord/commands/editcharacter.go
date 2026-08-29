@@ -429,12 +429,11 @@ func (c *editCharacterCmd) handleEditAccept(ctx context.Context, s DiscordSessio
 	})
 
 	if pending.section == sectionKeyGeneral {
-		display := *card
-		display.Description = markSpecChanges(oldSpec, pending.body)
-		messages, files, closeFiles := buildCharacterCardEmbed(c.imageClient, i.GuildID, &display)
-		defer closeFiles()
-
 		if len(pending.cardMessageIDs) == 0 {
+			display := *card
+			display.Description = markSpecChanges(oldSpec, pending.body)
+			messages, _, closeFiles := buildCharacterCardEmbed(c.imageClient, i.GuildID, &display)
+			defer closeFiles()
 			data := &discordgo.InteractionResponseData{
 				Content: fmt.Sprintf(responses.EditCharacter.Updated, card.DisplayName, "whole persona"),
 				Embeds:  messages[0],
@@ -451,16 +450,13 @@ func (c *editCharacterCmd) handleEditAccept(ctx context.Context, s DiscordSessio
 			return
 		}
 
-		// Multi-message confirmation
+		// Confirmation: the whole card stays in the channel.
 		if _, err := s.InteractionResponseEdit(pending.orig, &discordgo.WebhookEdit{
-			Content:    utils.PtrString(fmt.Sprintf(responses.EditCharacter.Updated, card.DisplayName, "whole persona")),
-			Embeds:     &messages[0],
-			Files:      files,
-			Components: nil,
+			Content: utils.PtrString(fmt.Sprintf(responses.EditCharacter.Updated, card.DisplayName, "whole persona")),
+			Embeds:  &[]*discordgo.MessageEmbed{},
 		}); err != nil {
 			logger.FromContext(ctx).Error("failed to update accepted proposal ack", "error", err, "characterID", pending.characterID)
 			c.respondExpiredEphemeral(ctx, s, i)
-			c.deleteCardMessages(ctx, s, i, pending.cardMessageIDs)
 			return
 		}
 
@@ -470,7 +466,10 @@ func (c *editCharacterCmd) handleEditAccept(ctx context.Context, s DiscordSessio
 		}); err != nil {
 			logger.FromContext(ctx).Error("failed to acknowledge accepted proposal", "error", err, "characterID", pending.characterID)
 		}
-		c.deleteCardMessages(ctx, s, i, pending.cardMessageIDs)
+		// Strip the proposal buttons from the last card message
+		if _, eerr := s.ChannelMessageEditComplex(i.ChannelID, pending.cardMessageIDs[len(pending.cardMessageIDs)-1], &discordgo.MessageEdit{Components: &[]discordgo.MessageComponent{}}); eerr != nil {
+			logger.FromContext(ctx).Error("failed to remove proposal buttons", "error", eerr, "characterID", pending.characterID)
+		}
 		return
 	}
 
@@ -510,7 +509,7 @@ func (c *editCharacterCmd) handleEditReject(ctx context.Context, s DiscordSessio
 			c.deleteCardMessages(ctx, s, i, pending.cardMessageIDs)
 			return
 		}
-		if len(pending.cardMessageIDs) > 1 {
+		if len(pending.cardMessageIDs) > 0 {
 			// The ack becomes the rejection note and every card message is
 			// deleted.
 			if _, err := s.InteractionResponseEdit(pending.orig, &discordgo.WebhookEdit{

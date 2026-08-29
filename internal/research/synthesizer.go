@@ -300,6 +300,9 @@ func (s *SynthesizerClient) buildSourceBlock(ctx context.Context, analysis *Anal
 		if src, err := s.scraper.Scrape(ctx, picked.URL); err == nil {
 			fixedCost := s.renderSynthesisPrompt(analysis, "", nil, 0)
 			maxChars := s.scrapeTokenBudget(fixedCost) * charsPerToken
+			if capChars := s.config.Research.MaxSourceChars; capChars > 0 && capChars < maxChars {
+				maxChars = capChars
+			}
 			return fmt.Sprintf("Source page: %s\nTitle: %s\n\nPage content:\n%s", picked.URL, src.Title, truncateToParagraphs(src.Text, maxChars))
 		} else {
 			logger.FromContext(ctx).Warn("scrape failed, falling back to title and description", "url", picked.URL, "error", err)
