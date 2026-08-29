@@ -5,18 +5,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
-	"time"
 
 	"characterllm/internal/logger"
 )
 
-// maxCacheBytes bounds the total size of the image cache.
-var maxCacheBytes int64 = 512 << 20 // 512 MiB
-
-// ImageCache is the on-disk store for images: write, read, delete, evict.
-// It has no knowledge of where bytes come from or what they contain.
+// ImageCache is the on-disk store for images: write, read, delete.
 type ImageCache struct {
 	Dir string
 }
@@ -36,8 +30,6 @@ func NewImageCache(dir string) *ImageCache {
 func (c *ImageCache) Save(guildID, characterID, ext string, data []byte) (string, error) {
 	filename := fmt.Sprintf("%s_%s%s", guildID, safeName(characterID), ext)
 	path := filepath.Join(c.Dir, filename)
-
-	c.evictOldImages(int64(len(data)))
 
 	out, err := os.Create(path)
 	if err != nil {
@@ -110,43 +102,4 @@ func safeName(s string) string {
 		}
 	}
 	return b.String()
-}
-
-// evictOldImages removes the oldest cache files until an incoming file of the
-// given size fits under maxCacheBytes.
-func (c *ImageCache) evictOldImages(incoming int64) {
-	entries, err := os.ReadDir(c.Dir)
-	if err != nil {
-		return
-	}
-	type file struct {
-		name    string
-		size    int64
-		modTime time.Time
-	}
-	var files []file
-	var total int64
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		info, err := e.Info()
-		if err != nil {
-			continue
-		}
-		total += info.Size()
-		files = append(files, file{e.Name(), info.Size(), info.ModTime()})
-	}
-	if total+incoming <= maxCacheBytes {
-		return
-	}
-	sort.Slice(files, func(i, j int) bool { return files[i].modTime.Before(files[j].modTime) })
-	for _, f := range files {
-		if total+incoming <= maxCacheBytes {
-			break
-		}
-		if os.Remove(filepath.Join(c.Dir, f.name)) == nil {
-			total -= f.size
-		}
-	}
 }

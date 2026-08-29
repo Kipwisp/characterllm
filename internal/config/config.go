@@ -161,7 +161,7 @@ func LoadConfig() *Config {
 		Ambient: loadAmbientConfig(),
 		General: GeneralConfig{
 			LogLevel:          getEnv("LOG_LEVEL", "INFO"),
-			ConversationLog:   getEnvBool("CONVERSATION_LOG", true),
+			ConversationLog:   getEnvBool("CONVERSATION_LOG", false),
 			CommandsAdminOnly: getEnvBool("COMMANDS_ADMIN_ONLY", false),
 		},
 	}

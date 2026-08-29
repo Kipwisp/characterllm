@@ -236,8 +236,8 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if cfg.General.LogLevel != "INFO" {
 		t.Errorf("Expected default LOG_LEVEL INFO, got %s", cfg.General.LogLevel)
 	}
-	if !cfg.General.ConversationLog {
-		t.Error("Expected default CONVERSATION_LOG true")
+	if cfg.General.ConversationLog {
+		t.Error("Expected default CONVERSATION_LOG false")
 	}
 	if cfg.General.CommandsAdminOnly {
 		t.Error("Expected default COMMANDS_ADMIN_ONLY false")

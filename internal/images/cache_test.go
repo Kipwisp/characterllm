@@ -1,11 +1,11 @@
 package images
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 // Real magic bytes so the sniff check passes; the remainder is inert filler
@@ -102,40 +102,17 @@ func TestImageCache(t *testing.T) {
 		}
 	})
 
-	t.Run("Evicts Oldest Files When Cache Exceeds Limit", func(t *testing.T) {
-		dir, err := os.MkdirTemp("", "image_evict_test")
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer os.RemoveAll(dir)
-		c := NewImageCache(dir)
-
-		size := int64(len(pngBytes))
-		// Room for the incoming file plus one existing file, so the oldest
-		// of the two pre-existing files must go.
-		maxCacheBytes = size*2 + 1
-		defer func() { maxCacheBytes = 512 << 20 }()
-
-		old, mid := time.Now().Add(-2*time.Hour), time.Now().Add(-time.Hour)
-		for name, mod := range map[string]time.Time{"1_old.png": old, "2_mid.png": mid} {
-			p := filepath.Join(dir, name)
-			if err := os.WriteFile(p, pngBytes, 0644); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.Chtimes(p, mod, mod); err != nil {
-				t.Fatal(err)
+	t.Run("Save Keeps Existing Files Regardless of Count", func(t *testing.T) {
+		for i := 0; i < 3; i++ {
+			id := fmt.Sprintf("keep%d", i)
+			if _, err := cache.Save("g", id, ".png", pngBytes); err != nil {
+				t.Fatalf("Save failed: %v", err)
 			}
 		}
-
-		if _, err := c.Save("g", "new", ".png", pngBytes); err != nil {
-			t.Fatalf("Save failed: %v", err)
-		}
-
-		if _, err := os.Stat(filepath.Join(dir, "1_old.png")); !os.IsNotExist(err) {
-			t.Error("oldest file should have been evicted")
-		}
-		if _, err := os.Stat(filepath.Join(dir, "2_mid.png")); err != nil {
-			t.Errorf("newer file should have been kept: %v", err)
+		for i := 0; i < 3; i++ {
+			if _, err := cache.GetImage("g", fmt.Sprintf("keep%d", i)); err != nil {
+				t.Errorf("image keep%d should still be present: %v", i, err)
+			}
 		}
 	})
 }
