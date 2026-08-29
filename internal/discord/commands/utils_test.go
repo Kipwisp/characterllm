@@ -441,10 +441,22 @@ func TestMarkChanges(t *testing.T) {
 			want:    "Slow cadence, dry wit.",
 		},
 		{
-			name:    "changed words are underlined",
+			name:    "changed sentence is struck through and underlined",
 			oldText: "Slow cadence, dry wit.",
 			newText: "Fast cadence, warm wit.",
-			want:    "~~Slow~~ __Fast__ cadence, ~~dry~~ __warm__ wit.",
+			want:    "~~Slow cadence, dry wit.~~ __Fast cadence, warm wit.__",
+		},
+		{
+			name:    "unchanged sentences are not touched",
+			oldText: "He is cold. He likes rain.",
+			newText: "He is warm. He likes rain.",
+			want:    "~~He is cold.~~ __He is warm.__ He likes rain.",
+		},
+		{
+			name:    "newline-separated sentences split the diff",
+			oldText: "Line one.\nLine two.",
+			newText: "Line one.\nLine three.",
+			want:    "Line one.\n~~Line two.~~\n__Line three.__",
 		},
 		{
 			name:    "case differences are not changes",
@@ -468,7 +480,7 @@ func TestMarkChanges(t *testing.T) {
 			name:    "markdown survives wrapping",
 			oldText: "- **Species**: Human",
 			newText: "- **Species**: Dragon",
-			want:    "- **Species**: ~~Human~~ __Dragon__",
+			want:    "~~- **Species**: Human~~ __- **Species**: Dragon__",
 		},
 	}
 	for _, tc := range tests {
@@ -487,8 +499,8 @@ func TestMarkChanges(t *testing.T) {
 }
 
 func TestMarkChanges_TooLargeFallsBack(t *testing.T) {
-	oldText := strings.Repeat("old ", 1100)
-	newText := strings.Repeat("new ", 1100)
+	oldText := strings.Repeat("old\n", 1100)
+	newText := strings.Repeat("new\n", 1100)
 	if got := markChanges(oldText, newText); got != newText {
 		t.Errorf("expected the fallback to return newText unchanged, got %q...", got[:min(len(got), 40)])
 	}
@@ -510,7 +522,7 @@ func TestMarkSpecChanges(t *testing.T) {
 	if !strings.Contains(sections["Identity & Temperament"], "~~") || !strings.Contains(sections["Identity & Temperament"], "__Perpetually") {
 		t.Errorf("identity section should carry the diff markup: %q", sections["Identity & Temperament"])
 	}
-	if !strings.Contains(sections["Appearance"], "__Dragon__") {
+	if !strings.Contains(sections["Appearance"], "__- **Species**: Dragon__") {
 		t.Errorf("appearance section should mark the change: %q", sections["Appearance"])
 	}
 	if strings.Contains(sections["Scenario"], "__") || strings.Contains(sections["Scenario"], "~~") {

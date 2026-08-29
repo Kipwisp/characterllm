@@ -275,7 +275,7 @@ func (c *editCharacterCmd) proposeRewrite(ctx context.Context, s DiscordSession,
 		},
 	}
 
-	// The preview underlines or strikethroughs the words that changed so the
+	// The preview underlines or strikethroughs the sentences that changed so the
 	// proposal is easy to scan.
 	var marked string
 	if section == sectionKeyGeneral {

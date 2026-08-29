@@ -628,24 +628,24 @@ func characterAvatarEmbed(imageClient images.ImageClient, guildID string, card *
 // unchanged.
 //
 // How it works, in four steps:
-//  1. Split both texts into word tokens (case-insensitive).
+//  1. Split both texts into sentence tokens (case-insensitive); a sentence
+//     ends at a newline or after sentence-final punctuation.
 //  2. Find the longest common subsequence (LCS) of tokens — the biggest set
-//     of words that appear in both texts in the same order. These are the
-//     "unchanged" anchor words; the algorithm works bottom-up in a memo
-//     table so each pair of positions is solved only once.
-//  3. Record the byte offset of every new word inside newText.
+//     of sentences that appear in both texts in the same order. These are
+//     the "unchanged" anchor sentences; the algorithm works bottom-up in a
+//     memo table so each pair of positions is solved only once.
+//  3. Record the byte offset of every new sentence inside newText.
 //  4. Walk the LCS table from the start. At each step the table tells us
-//     whether the current words match (copy as-is), the old word was
-//     dropped (strikethrough), or the new word is an addition (underline).
-//     The output is built by slicing newText itself at the recorded
-//     offsets, so original line breaks, spacing, and markdown survive;
-//     deleted words (which don't exist in newText) are spliced in at the
-//     position where they were dropped.
+//     whether the current sentences match (copy as-is), the old sentence
+//     was dropped (strikethrough), or the new sentence is an addition
+//     (underline). The output is built by slicing newText itself at the
+//     recorded offsets, so original line breaks, spacing, and markdown
+//     survive; deleted sentences (which don't exist in newText) are
+//     spliced in at the position where they were dropped.
 func markChanges(oldText, newText string) string {
-	// Step 1: tokenize. Words are the unit of the diff so a changed phrase
-	// highlights as whole words rather than a character soup.
-	oldTokens := strings.Fields(oldText)
-	newTokens := strings.Fields(newText)
+	// Step 1: tokenize. Sentences are the unit of the diff
+	oldTokens := splitSentences(oldText)
+	newTokens := splitSentences(newText)
 	// Steps 2 and 3 cost one table cell and one walk step per token pair,
 	// so bail out for pathologically large inputs and show the plain text.
 	if len(oldTokens) == 0 || len(newTokens) == 0 || len(oldTokens)*len(newTokens) > 1_000_000 {
@@ -680,30 +680,36 @@ func markChanges(oldText, newText string) string {
 		}
 	}
 
-	// Step 3: byte offset of every new word inside newText. The renderer slices
-	// newText at these offsets, so it copies the real text (with its
-	// original whitespace and markdown) instead of re-joining words.
-	// Whitespace here means unicode.IsSpace, the same rule strings.Fields
+	// Step 3: byte offsets of every token in both texts. The renderer slices
+	// the real text at these offsets, so it copies the original text (with
+	// its whitespace and markdown) instead of re-joining tokens.
+	// Whitespace here means unicode.IsSpace, the same rule splitSentences
 	// used when splitting, so the offsets line up with the tokens.
-	newRanges := make([][2]int, m)
-	pos := 0
-	for j := range newTokens {
-		for pos < len(newText) {
-			r, size := utf8.DecodeRuneInString(newText[pos:])
-			if !unicode.IsSpace(r) {
-				break
+	tokenRanges := func(text string, tokens []string) [][2]int {
+		ranges := make([][2]int, len(tokens))
+		pos := 0
+		for j := range tokens {
+			for pos < len(text) {
+				r, size := utf8.DecodeRuneInString(text[pos:])
+				if !unicode.IsSpace(r) {
+					break
+				}
+				pos += size
 			}
-			pos += size
+			ranges[j] = [2]int{pos, pos + len(tokens[j])}
+			pos = ranges[j][1]
 		}
-		newRanges[j] = [2]int{pos, pos + len(newTokens[j])}
-		pos = newRanges[j][1]
+		return ranges
 	}
+	oldRanges := tokenRanges(oldText, oldTokens)
+	newRanges := tokenRanges(newText, newTokens)
 
 	// Helpers for the step 4 walk. It appends to out as it walks, and
 	// consumed is how far through newText the plain copies have already
 	// reached.
 	var out strings.Builder
 	consumed := 0
+	oldConsumed := 0
 	// ensureSep separates a span from preceding text when the original
 	// whitespace does not already provide one.
 	ensureSep := func() {
@@ -726,13 +732,24 @@ func markChanges(oldText, newText string) string {
 		out.WriteString("__" + newText[newRanges[from][0]:newRanges[to-1][1]] + "__")
 		consumed = newRanges[to-1][1]
 	}
-	// delRun wraps old tokens [from, to) in one strikethrough span.
+	// delRun wraps old tokens [from, to) in one strikethrough span, sliced
+	// from oldText so deleted lines keep their original line breaks. The
+	// whitespace before the first deleted token is copied plain, so a
+	// separator line break does not end up inside the strikethrough.
 	delRun := func(from, to int) {
+		out.WriteString(oldText[oldConsumed:oldRanges[from][0]])
 		ensureSep()
-		out.WriteString("~~" + strings.Join(oldTokens[from:to], " ") + "~~")
+		out.WriteString("~~" + oldText[oldRanges[from][0]:oldRanges[to-1][1]] + "~~")
+		oldConsumed = oldRanges[to-1][1]
 	}
 	nextIsMatch := func(i, j int) bool {
 		return i < n && j < m && strings.EqualFold(oldTokens[i], newTokens[j])
+	}
+	// sameLine reports whether token j+1 directly follows token j on the
+	// same line (a single space between them). Underline spans across
+	// newlines render unreliably in Discord, so insertion runs stop there.
+	sameLine := func(j int) bool {
+		return newRanges[j+1][0]-newRanges[j][1] == 1 && newText[newRanges[j][1]] == ' '
 	}
 	// goesLeft reports whether the best path through (i, j) drops old word i
 	// (goes down the table) rather than skipping new word j (goes right).
@@ -747,9 +764,10 @@ func markChanges(oldText, newText string) string {
 	for i < n && j < m {
 		switch {
 		case nextIsMatch(i, j):
-			// Anchor word: present in both texts. Copy it (and any
+			// Anchor sentence: present in both texts. Copy it (and any
 			// whitespace in between) from newText untouched.
 			plain(newRanges[j][1])
+			oldConsumed = oldRanges[i][1]
 			i++
 			j++
 		case goesLeft(i, j):
@@ -762,13 +780,12 @@ func markChanges(oldText, newText string) string {
 			delRun(i, k)
 			i = k
 		default:
-			// The table skips new words: they are insertions. Group the run
-			// while the words stay on the same line (a one-space gap), since
-			// underline spans across newlines render unreliably in Discord.
-			// The run also stops short of any word that would match the
-			// current old word, so a coming anchor is not swallowed.
+			// The table skips new sentences: they are insertions. Group the
+			// run while the sentences stay on the same line. The run also
+			// stops short of any sentence that would match the current old
+			// sentence, so a coming anchor is not swallowed.
 			k := j
-			for k+1 < m && !nextIsMatch(i, k+1) && !goesLeft(i, k+1) && newRanges[k+1][0]-newRanges[k][1] == 1 {
+			for k+1 < m && !nextIsMatch(i, k+1) && !goesLeft(i, k+1) && sameLine(k) {
 				k++
 			}
 			insRun(j, k+1)
@@ -782,13 +799,56 @@ func markChanges(oldText, newText string) string {
 	}
 	for j < m {
 		k := j
-		for k+1 < m && newRanges[k+1][0]-newRanges[k][1] == 1 {
+		for k+1 < m && sameLine(k) {
 			k++
 		}
 		insRun(j, k+1)
 		j = k + 1
 	}
 	return out.String()
+}
+
+// splitSentences splits text into sentence tokens, the unit of the change
+// diff. A sentence ends at a newline, or after sentence-final punctuation
+// (., !, ?) that is followed by whitespace or the end of the text. Tokens
+// keep their punctuation; whitespace between sentences belongs to no token.
+func splitSentences(text string) []string {
+	var sentences []string
+	start := -1
+	for i, r := range text {
+		if start < 0 {
+			if !unicode.IsSpace(r) {
+				start = i
+			}
+			continue
+		}
+		end := -1
+		if r == '\n' {
+			end = i
+		} else if r == '.' || r == '!' || r == '?' {
+			next := i + utf8.RuneLen(r)
+			if next >= len(text) || unicode.IsSpace(runeAt(text, next)) {
+				end = next
+			}
+		}
+		if end >= 0 {
+			sentences = append(sentences, text[start:end])
+			start = -1
+		}
+	}
+	if start >= 0 {
+		sentences = append(sentences, text[start:])
+	}
+	return sentences
+}
+
+// runeAt returns the rune of text at byte offset i, or 0 past the end.
+func runeAt(text string, i int) rune {
+	if i >= len(text) {
+		return 0
+	}
+	r, _ := utf8.DecodeRuneInString(text[i:])
+	return r
 }
 
 // markSpecChanges marks up the diff between two persona specifications

@@ -254,11 +254,8 @@ func TestEditCharacterCmd_SectionRewrite(t *testing.T) {
 	if len(preview.embeds) != 1 || preview.embeds[0].Title != research.SectionVoice {
 		t.Fatalf("Expected a preview embed titled %q, got %+v", research.SectionVoice, preview.embeds)
 	}
-	if !strings.Contains(preview.embeds[0].Description, "__Fast__") || !strings.Contains(preview.embeds[0].Description, "__warm__") {
-		t.Errorf("Expected changed words underlined in the preview embed, got %q", preview.embeds[0].Description)
-	}
-	if strings.Contains(preview.embeds[0].Description, "__cadence") {
-		t.Errorf("unchanged words must not be underlined: %q", preview.embeds[0].Description)
+	if !strings.Contains(preview.embeds[0].Description, "~~Slow cadence, dry wit.~~") || !strings.Contains(preview.embeds[0].Description, "__Fast cadence, warm wit.__") {
+		t.Errorf("Expected the changed sentence struck through and underlined in the preview embed, got %q", preview.embeds[0].Description)
 	}
 	card, _ := sm.GetCharacterCard(context.Background(), guildID, "char1")
 	if card.Description != editTestSpec {
@@ -274,7 +271,7 @@ func TestEditCharacterCmd_SectionRewrite(t *testing.T) {
 	if len(finalEmbeds) != 1 || finalEmbeds[0].Title != research.SectionVoice {
 		t.Fatalf("Expected a section embed on the final message, got %+v", finalEmbeds)
 	}
-	if !strings.Contains(finalEmbeds[0].Description, "__Fast__") || !strings.Contains(finalEmbeds[0].Description, "~~Slow~~") {
+	if !strings.Contains(finalEmbeds[0].Description, "__Fast cadence, warm wit.__") || !strings.Contains(finalEmbeds[0].Description, "~~Slow cadence, dry wit.~~") {
 		t.Errorf("Expected the marked-up section body in the final embed, got %q", finalEmbeds[0].Description)
 	}
 	if strings.Contains(finalContent, "Fast cadence") {
