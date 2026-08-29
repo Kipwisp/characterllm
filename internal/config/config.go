@@ -21,10 +21,8 @@ type Config struct {
 }
 
 type DiscordConfig struct {
-	Token       string
-	ClientID    string
-	MainGuild   string
-	MainChannel string
+	Token    string
+	ClientID string
 }
 
 type LLMConfig struct {
@@ -89,10 +87,13 @@ type AmbientConfig struct {
 }
 
 type GeneralConfig struct {
-	LogLevel  string
-	TopicRate string
+	LogLevel string
 	// ConversationLog toggles the per-guild conversation audit files.
 	ConversationLog bool
+	// CommandsAdminOnly registers every slash command with the
+	// Administrator permission requirement, so only members with an admin
+	// role can see and use the bot's commands.
+	CommandsAdminOnly bool
 }
 
 // LoadConfig loads configuration from .env file and environment variables.
@@ -101,10 +102,8 @@ func LoadConfig() *Config {
 
 	return &Config{
 		Discord: DiscordConfig{
-			Token:       getEnv("DISCORD_TOKEN", ""),
-			ClientID:    getEnv("CLIENT_ID", ""),
-			MainGuild:   getEnv("MAIN_GUILD", ""),
-			MainChannel: getEnv("MAIN_CHANNEL", "general"),
+			Token:    getEnv("DISCORD_TOKEN", ""),
+			ClientID: getEnv("CLIENT_ID", ""),
 		},
 		LLM: LLMConfig{
 			URL:                 getEnv("LLM_URL", "http://localhost:8080/v1/chat/completions"),
@@ -140,9 +139,9 @@ func LoadConfig() *Config {
 		},
 		Ambient: loadAmbientConfig(),
 		General: GeneralConfig{
-			LogLevel:        getEnv("LOG_LEVEL", "INFO"),
-			TopicRate:       getEnv("TOPIC_RATE", "10000"),
-			ConversationLog: getEnvBool("CONVERSATION_LOG", true),
+			LogLevel:          getEnv("LOG_LEVEL", "INFO"),
+			ConversationLog:   getEnvBool("CONVERSATION_LOG", true),
+			CommandsAdminOnly: getEnvBool("COMMANDS_ADMIN_ONLY", false),
 		},
 	}
 }

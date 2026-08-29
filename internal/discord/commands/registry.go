@@ -99,8 +99,14 @@ func New(d Deps) *Registry {
 	} {
 		cmds = append(cmds, cmd)
 	}
+	var adminOnly *int64
+	if d.Config != nil && d.Config.General.CommandsAdminOnly {
+		perms := int64(discordgo.PermissionAdministrator)
+		adminOnly = &perms
+	}
 	for _, cmd := range cmds {
 		def := cmd.Definition()
+		def.DefaultMemberPermissions = adminOnly
 		registry.byName[def.Name] = cmd
 		registry.defs = append(registry.defs, def)
 	}

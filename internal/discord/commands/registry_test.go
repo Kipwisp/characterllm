@@ -39,6 +39,37 @@ func TestRegistry_Definitions(t *testing.T) {
 	}
 }
 
+func TestRegistry_AdminOnlyCommands(t *testing.T) {
+	want := int64(discordgo.PermissionAdministrator)
+
+	t.Run("disabled by default", func(t *testing.T) {
+		for _, r := range []*Registry{New(Deps{}), New(Deps{Config: &config.Config{}})} {
+			defs := r.Definitions()
+			if len(defs) == 0 {
+				t.Fatal("expected command definitions")
+			}
+			for _, d := range defs {
+				if d.DefaultMemberPermissions != nil {
+					t.Errorf("command %q: expected nil DefaultMemberPermissions, got %d", d.Name, *d.DefaultMemberPermissions)
+				}
+			}
+		}
+	})
+
+	t.Run("enabled stamps every definition", func(t *testing.T) {
+		cfg := &config.Config{General: config.GeneralConfig{CommandsAdminOnly: true}}
+		defs := New(Deps{Config: cfg}).Definitions()
+		if len(defs) == 0 {
+			t.Fatal("expected command definitions")
+		}
+		for _, d := range defs {
+			if d.DefaultMemberPermissions == nil || *d.DefaultMemberPermissions != want {
+				t.Errorf("command %q: expected DefaultMemberPermissions %d, got %v", d.Name, want, d.DefaultMemberPermissions)
+			}
+		}
+	})
+}
+
 func TestRegistry_InviteCommandGatedByConfig(t *testing.T) {
 	// Disabled by default: no Config at all.
 	if r := New(Deps{}); len(r.Definitions()) != 11 {

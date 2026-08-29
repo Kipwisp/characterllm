@@ -9,12 +9,12 @@ func TestLoadConfig(t *testing.T) {
 	// Save original environment to restore later
 	originalEnv := make(map[string]string)
 	envVars := []string{
-		"DISCORD_TOKEN", "CLIENT_ID", "MAIN_GUILD", "MAIN_CHANNEL",
+		"DISCORD_TOKEN", "CLIENT_ID",
 		"LLM_URL", "LLM_MODEL", "LLM_MAX_RETRIES", "LLM_MAX_CONTEXT", "LLM_COMPACTION_THRESHOLD", "LLM_RECENT_MEMORY_WINDOW", "LLM_VISION", "LLM_MAX_IMAGES",
 		"SYSTEM_PROMPT_PATH", "COMPACTION_PROMPT_PATH", "SYNTHESIS_PROMPT_PATH", "ANALYZER_PROMPT_PATH", "EDIT_SECTION_PROMPT_PATH",
 		"SEARCH_PROVIDER", "SEARXNG_URL", "SEARXNG_ENGINES", "MAX_SEARCH_RESULTS", "IMAGE_CACHE_DIR", "LLM_AVATAR_PICK",
 		"INVITE_COMMAND_ENABLED",
-		"LOG_LEVEL", "TOPIC_RATE", "CONVERSATION_LOG",
+		"LOG_LEVEL", "CONVERSATION_LOG", "COMMANDS_ADMIN_ONLY",
 	}
 
 	for _, v := range envVars {
@@ -35,8 +35,6 @@ func TestLoadConfig(t *testing.T) {
 	// Set test values
 	os.Setenv("DISCORD_TOKEN", "test-token")
 	os.Setenv("CLIENT_ID", "test-client")
-	os.Setenv("MAIN_GUILD", "test-guild")
-	os.Setenv("MAIN_CHANNEL", "test-channel")
 	os.Setenv("LLM_URL", "http://test-llm")
 	os.Setenv("LLM_MODEL", "test-model")
 	os.Setenv("LLM_MAX_RETRIES", "5")
@@ -57,9 +55,9 @@ func TestLoadConfig(t *testing.T) {
 	os.Setenv("IMAGE_CACHE_DIR", "test/cache")
 	os.Setenv("LLM_AVATAR_PICK", "true")
 	os.Setenv("LOG_LEVEL", "DEBUG")
-	os.Setenv("TOPIC_RATE", "5000")
 	os.Setenv("INVITE_COMMAND_ENABLED", "true")
 	os.Setenv("CONVERSATION_LOG", "false")
+	os.Setenv("COMMANDS_ADMIN_ONLY", "true")
 
 	cfg := LoadConfig()
 
@@ -68,12 +66,6 @@ func TestLoadConfig(t *testing.T) {
 	}
 	if cfg.Discord.ClientID != "test-client" {
 		t.Errorf("Expected CLIENT_ID test-client, got %s", cfg.Discord.ClientID)
-	}
-	if cfg.Discord.MainGuild != "test-guild" {
-		t.Errorf("Expected MAIN_GUILD test-guild, got %s", cfg.Discord.MainGuild)
-	}
-	if cfg.Discord.MainChannel != "test-channel" {
-		t.Errorf("Expected MAIN_CHANNEL test-channel, got %s", cfg.Discord.MainChannel)
 	}
 	if cfg.LLM.URL != "http://test-llm" {
 		t.Errorf("Expected LLM_URL http://test-llm, got %s", cfg.LLM.URL)
@@ -138,23 +130,23 @@ func TestLoadConfig(t *testing.T) {
 	if cfg.General.LogLevel != "DEBUG" {
 		t.Errorf("Expected LOG_LEVEL DEBUG, got %s", cfg.General.LogLevel)
 	}
-	if cfg.General.TopicRate != "5000" {
-		t.Errorf("Expected TOPIC_RATE 5000, got %s", cfg.General.TopicRate)
-	}
 	if cfg.General.ConversationLog {
 		t.Error("Expected CONVERSATION_LOG false")
+	}
+	if !cfg.General.CommandsAdminOnly {
+		t.Error("Expected COMMANDS_ADMIN_ONLY true")
 	}
 }
 
 func TestLoadConfigDefaults(t *testing.T) {
 	// Clear environment variables to test defaults
 	envVars := []string{
-		"DISCORD_TOKEN", "CLIENT_ID", "MAIN_GUILD", "MAIN_CHANNEL",
+		"DISCORD_TOKEN", "CLIENT_ID",
 		"LLM_URL", "LLM_MODEL", "LLM_MAX_RETRIES", "LLM_MAX_CONTEXT", "LLM_COMPACTION_THRESHOLD", "LLM_RECENT_MEMORY_WINDOW", "LLM_VISION", "LLM_MAX_IMAGES",
 		"SYSTEM_PROMPT_PATH", "COMPACTION_PROMPT_PATH", "SYNTHESIS_PROMPT_PATH", "ANALYZER_PROMPT_PATH", "EDIT_SECTION_PROMPT_PATH",
 		"SEARCH_PROVIDER", "SEARXNG_URL", "SEARXNG_ENGINES", "MAX_SEARCH_RESULTS", "IMAGE_CACHE_DIR", "LLM_AVATAR_PICK",
 		"INVITE_COMMAND_ENABLED",
-		"LOG_LEVEL", "TOPIC_RATE", "CONVERSATION_LOG",
+		"LOG_LEVEL", "CONVERSATION_LOG", "COMMANDS_ADMIN_ONLY",
 	}
 
 	originalEnv := make(map[string]string)
@@ -173,9 +165,6 @@ func TestLoadConfigDefaults(t *testing.T) {
 
 	cfg := LoadConfig()
 
-	if cfg.Discord.MainChannel != "general" {
-		t.Errorf("Expected default MAIN_CHANNEL general, got %s", cfg.Discord.MainChannel)
-	}
 	if cfg.LLM.URL != "http://localhost:8080/v1/chat/completions" {
 		t.Errorf("Expected default LLM_URL, got %s", cfg.LLM.URL)
 	}
@@ -226,6 +215,9 @@ func TestLoadConfigDefaults(t *testing.T) {
 	}
 	if !cfg.General.ConversationLog {
 		t.Error("Expected default CONVERSATION_LOG true")
+	}
+	if cfg.General.CommandsAdminOnly {
+		t.Error("Expected default COMMANDS_ADMIN_ONLY false")
 	}
 }
 
