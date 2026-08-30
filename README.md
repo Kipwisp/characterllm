@@ -1,6 +1,6 @@
 # CharacterLLM Discord Bot
 
-CharacterLLM is a Discord bot that can create fun chatbot personalities based on any prompt you give it. Give it a character's name and it researches them on the web and builds a detailed persona of who they are, how they look, and how they speak, then joins your server and roleplays as them in their own voice. You can also request modifications to the character (an alternate-universe twist, a personality tweak) or drop them into a scenario that shapes how the conversation starts.
+CharacterLLM is a Discord bot that can create fun and interesting chatbot personalities based on any prompt you give it. Give it a character's name and it researches them on the web and builds a detailed persona of who they are, how they look, and how they speak, then roleplays as them in their own voice. You can also request modifications to the character (an alternate-universe twist, a personality tweak) or drop them into a scenario that shapes how the conversation starts.
 
 Conversations persist per character and per thread: the bot remembers what has happened, who you've clashed with, and the running story, even across days of chatting. A few things you can do with it:
 
