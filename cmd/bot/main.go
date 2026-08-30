@@ -25,6 +25,9 @@ import (
 	"characterllm/internal/session"
 )
 
+// database file
+const sessionDBPath = "data/bot_sessions.db"
+
 func main() {
 	cfg := config.LoadConfig()
 
@@ -59,7 +62,7 @@ func main() {
 	llmClient.(*llm.OpenAIClient).ImageTokenEstimate = imageTokenEstimate
 
 	// Initialize Session Manager
-	sessionMgr, err := session.NewManager("bot_sessions.db", promptSet.System)
+	sessionMgr, err := session.NewManager(sessionDBPath, promptSet.System)
 	if err != nil {
 		slog.Error("failed to initialize session manager", "error", err)
 		os.Exit(1)

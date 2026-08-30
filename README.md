@@ -61,6 +61,16 @@ go build -o bin/bot ./cmd/bot
 ./bin/bot
 ```
 
+### Running with Docker
+
+```sh
+git clone https://github.com/Kipwisp/characterllm.git
+cd characterllm
+
+# create the .env, then:
+docker compose up -d --build
+```
+
 ## Config Options
 
 ### Discord
