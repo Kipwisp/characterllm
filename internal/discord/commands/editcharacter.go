@@ -77,8 +77,9 @@ type pendingEdit struct {
 	latency          time.Duration
 	avatarAttachment string
 	// cardMessageIDs holds the plain channel messages of a multi-message
-	// whole-persona preview (in send order); empty for single-message
-	// previews, whose preview is the ack message itself.
+	// whole-persona preview (in send order, excluding the first part, which
+	// rides along with the ack message); empty for single-message previews,
+	// whose preview is the ack message itself.
 	cardMessageIDs []string
 	// orig is the original command interaction: its token (valid 15
 	// minutes) is the only route left to the preview's ack message, which
@@ -316,9 +317,13 @@ func (c *editCharacterCmd) proposeRewrite(ctx context.Context, s DiscordSession,
 		return nil
 	}
 
-	// A multi-message preview
+	// A multi-message preview: the first part rides along with the ack,
+	// matching the single-message preview, and each remaining part gets its
+	// own channel message.
 	if _, err := s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
 		Content:    utils.PtrString(previewContent),
+		Embeds:     &messages[0],
+		Files:      files,
 		Components: nil,
 	}); err != nil {
 		logger.FromContext(ctx).Error("failed to show edit proposal", "error", err, "character_id", card.CharacterID)
@@ -327,11 +332,8 @@ func (c *editCharacterCmd) proposeRewrite(ctx context.Context, s DiscordSession,
 	}
 
 	var cardIDs []string
-	for idx, messageEmbeds := range messages {
-		send := &discordgo.MessageSend{Embeds: messageEmbeds}
-		if idx == 0 {
-			send.Files = files
-		}
+	for idx := 1; idx < len(messages); idx++ {
+		send := &discordgo.MessageSend{Embeds: messages[idx]}
 		if idx == len(messages)-1 {
 			send.Components = components
 		}
@@ -450,10 +452,10 @@ func (c *editCharacterCmd) handleEditAccept(ctx context.Context, s DiscordSessio
 			return
 		}
 
-		// Confirmation: the whole card stays in the channel.
+		// Confirmation: the whole card stays in the channel, including the
+		// first part in the ack, so only the text is swapped.
 		if _, err := s.InteractionResponseEdit(pending.orig, &discordgo.WebhookEdit{
 			Content: utils.PtrString(fmt.Sprintf(responses.EditCharacter.Updated, card.DisplayName, "whole persona")),
-			Embeds:  &[]*discordgo.MessageEmbed{},
 		}); err != nil {
 			logger.FromContext(ctx).Error("failed to update accepted proposal ack", "error", err, "characterID", pending.characterID)
 			c.respondExpiredEphemeral(ctx, s, i)
@@ -513,9 +515,10 @@ func (c *editCharacterCmd) handleEditReject(ctx context.Context, s DiscordSessio
 			// The ack becomes the rejection note and every card message is
 			// deleted.
 			if _, err := s.InteractionResponseEdit(pending.orig, &discordgo.WebhookEdit{
-				Content:    utils.PtrString(responses.EditCharacter.Rejected),
-				Embeds:     &[]*discordgo.MessageEmbed{},
-				Components: nil,
+				Content:     utils.PtrString(responses.EditCharacter.Rejected),
+				Embeds:      &[]*discordgo.MessageEmbed{},
+				Attachments: &[]*discordgo.MessageAttachment{},
+				Components:  nil,
 			}); err != nil {
 				logger.FromContext(ctx).Error("failed to update rejected proposal ack", "error", err, "guild_id", i.GuildID)
 				c.respondExpiredEphemeral(ctx, s, i)
