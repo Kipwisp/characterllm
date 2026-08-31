@@ -28,7 +28,10 @@ type DiscordConfig struct {
 
 type LLMConfig struct {
 	URL                 string
-	Model               string
+	// APIKey, when set, is sent as a Bearer Authorization header on every
+	// LLM request.
+	APIKey string
+	Model  string
 	MaxRetries          int
 	MaxContext          int
 	CompactionThreshold float64
@@ -122,6 +125,7 @@ func LoadConfig() *Config {
 		},
 		LLM: LLMConfig{
 			URL:                 getEnv("LLM_URL", "http://localhost:8080/v1/chat/completions"),
+			APIKey:              getEnv("LLM_API_KEY", ""),
 			Model:               getEnv("LLM_MODEL", ""),
 			MaxRetries:          getEnvPositiveInt("LLM_MAX_RETRIES", 2),
 			MaxContext:          getEnvPositiveInt("LLM_MAX_CONTEXT", 10000),

@@ -369,3 +369,52 @@ func TestLlamaMessageText_PartsContent(t *testing.T) {
 		t.Errorf("expected text parts concatenated, got %q", w.text())
 	}
 }
+
+func TestOpenAIClient_AuthHeader(t *testing.T) {
+	var seenAuth, seenNoAuth int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Header.Get("Authorization") {
+		case "Bearer test-key":
+			seenAuth++
+		case "":
+			seenNoAuth++
+		default:
+			t.Errorf("unexpected Authorization header: %s", r.Header.Get("Authorization"))
+		}
+		switch r.URL.Path {
+		case "/v1/models":
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]any{})
+		default:
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(LlamaResponse{
+				Choices: []llamaChoice{{Message: llamaMessage{Role: "assistant", Content: json.RawMessage(`"ok"`)}}},
+			})
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, 30*time.Second).(*OpenAIClient)
+	client.APIKey = "test-key"
+
+	if _, err := client.Ping(context.Background()); err != nil {
+		t.Fatalf("Ping() error: %v", err)
+	}
+	if _, _, err := client.GenerateResponse(context.Background(), []Message{{Role: "user", Content: "hi"}}, "model"); err != nil {
+		t.Fatalf("GenerateResponse() error: %v", err)
+	}
+	if seenAuth != 2 {
+		t.Errorf("expected 2 authenticated requests, got %d", seenAuth)
+	}
+	if seenNoAuth != 0 {
+		t.Errorf("expected no unauthenticated requests, got %d", seenNoAuth)
+	}
+
+	noAuth := NewClient(server.URL, 30*time.Second).(*OpenAIClient)
+	if _, _, err := noAuth.GenerateResponse(context.Background(), []Message{{Role: "user", Content: "hi"}}, "model"); err != nil {
+		t.Fatalf("GenerateResponse() error: %v", err)
+	}
+	if seenNoAuth != 1 {
+		t.Errorf("expected 1 unauthenticated request, got %d", seenNoAuth)
+	}
+}

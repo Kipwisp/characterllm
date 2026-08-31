@@ -121,6 +121,9 @@ type llamaChoice struct {
 // OpenAIClient handles communication with an OpenAI-compatible LLM server (e.g., llama.cpp).
 type OpenAIClient struct {
 	URL string
+	// APIKey, when set, is sent as a Bearer Authorization header on every
+	// request.
+	APIKey string
 	// ImageTokenEstimate overrides the per-image cost in the token-count
 	// fallback heuristic; zero uses DefaultImageTokenEstimate.
 	ImageTokenEstimate    int
@@ -151,6 +154,7 @@ func (c *OpenAIClient) Ping(ctx context.Context) (time.Duration, error) {
 	if err != nil {
 		return 0, err
 	}
+	c.setAuth(req)
 
 	resp, err := c.client.Do(req)
 	if err != nil {
@@ -242,6 +246,7 @@ func (c *OpenAIClient) fetchRemoteTokens(ctx context.Context, messages []Message
 		return 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	c.setAuth(req)
 
 	resp, err := c.client.Do(req)
 	if err != nil {
@@ -299,6 +304,13 @@ func (c *OpenAIClient) GenerateResponse(ctx context.Context, messages []Message,
 	return "", "", fmt.Errorf("all %d retries failed: %v", maxRetries, lastErr)
 }
 
+// setAuth attaches the configured Authorization header, if any.
+func (c *OpenAIClient) setAuth(req *http.Request) {
+	if c.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	}
+}
+
 // doGenerate performs a single LLM request. The boolean result indicates whether
 // retrying is worthwhile (transport errors, 5xx, 429); other 4xx errors are not.
 func (c *OpenAIClient) doGenerate(ctx context.Context, jsonData []byte, attempt, maxRetries int) (string, string, bool, error) {
@@ -307,6 +319,7 @@ func (c *OpenAIClient) doGenerate(ctx context.Context, jsonData []byte, attempt,
 		return "", "", false, fmt.Errorf("failed to create request: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	c.setAuth(req)
 
 	resp, err := c.client.Do(req)
 	if err != nil {

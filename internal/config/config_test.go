@@ -10,7 +10,7 @@ func TestLoadConfig(t *testing.T) {
 	originalEnv := make(map[string]string)
 	envVars := []string{
 		"DISCORD_TOKEN", "CLIENT_ID",
-		"LLM_URL", "LLM_MODEL", "LLM_MAX_RETRIES", "LLM_MAX_CONTEXT", "LLM_COMPACTION_THRESHOLD", "LLM_RECENT_MEMORY_WINDOW", "LLM_VISION", "LLM_MAX_IMAGES",
+		"LLM_URL", "LLM_API_KEY", "LLM_MODEL", "LLM_MAX_RETRIES", "LLM_MAX_CONTEXT", "LLM_COMPACTION_THRESHOLD", "LLM_RECENT_MEMORY_WINDOW", "LLM_VISION", "LLM_MAX_IMAGES",
 		"SYSTEM_PROMPT_PATH", "COMPACTION_PROMPT_PATH", "SYNTHESIS_PROMPT_PATH", "ANALYZER_PROMPT_PATH", "EDIT_SECTION_PROMPT_PATH",
 		"SEARCH_PROVIDER", "SEARXNG_URL", "SEARXNG_ENGINES", "MAX_SEARCH_RESULTS", "IMAGE_CACHE_DIR", "IMAGE_MAX_EDGE", "MAX_IMAGE_SEARCH_RESULTS", "LLM_AVATAR_PICK",
 		"RESEARCH_MAX_SOURCE_CHARS",
@@ -37,6 +37,7 @@ func TestLoadConfig(t *testing.T) {
 	os.Setenv("DISCORD_TOKEN", "test-token")
 	os.Setenv("CLIENT_ID", "test-client")
 	os.Setenv("LLM_URL", "http://test-llm")
+	os.Setenv("LLM_API_KEY", "test-llm-key")
 	os.Setenv("LLM_MODEL", "test-model")
 	os.Setenv("LLM_MAX_RETRIES", "5")
 	os.Setenv("LLM_MAX_CONTEXT", "8192")
@@ -73,6 +74,9 @@ func TestLoadConfig(t *testing.T) {
 	}
 	if cfg.LLM.URL != "http://test-llm" {
 		t.Errorf("Expected LLM_URL http://test-llm, got %s", cfg.LLM.URL)
+	}
+	if cfg.LLM.APIKey != "test-llm-key" {
+		t.Errorf("Expected LLM_API_KEY test-llm-key, got %s", cfg.LLM.APIKey)
 	}
 	if cfg.LLM.Model != "test-model" {
 		t.Errorf("Expected LLM_MODEL test-model, got %s", cfg.LLM.Model)
@@ -155,7 +159,7 @@ func TestLoadConfigDefaults(t *testing.T) {
 	// Clear environment variables to test defaults
 	envVars := []string{
 		"DISCORD_TOKEN", "CLIENT_ID",
-		"LLM_URL", "LLM_MODEL", "LLM_MAX_RETRIES", "LLM_MAX_CONTEXT", "LLM_COMPACTION_THRESHOLD", "LLM_RECENT_MEMORY_WINDOW", "LLM_VISION", "LLM_MAX_IMAGES",
+		"LLM_URL", "LLM_API_KEY", "LLM_MODEL", "LLM_MAX_RETRIES", "LLM_MAX_CONTEXT", "LLM_COMPACTION_THRESHOLD", "LLM_RECENT_MEMORY_WINDOW", "LLM_VISION", "LLM_MAX_IMAGES",
 		"SYSTEM_PROMPT_PATH", "COMPACTION_PROMPT_PATH", "SYNTHESIS_PROMPT_PATH", "ANALYZER_PROMPT_PATH", "EDIT_SECTION_PROMPT_PATH",
 		"SEARCH_PROVIDER", "SEARXNG_URL", "SEARXNG_ENGINES", "MAX_SEARCH_RESULTS", "IMAGE_CACHE_DIR", "IMAGE_MAX_EDGE", "MAX_IMAGE_SEARCH_RESULTS", "LLM_AVATAR_PICK",
 		"RESEARCH_MAX_SOURCE_CHARS",

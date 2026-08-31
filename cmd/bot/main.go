@@ -60,6 +60,7 @@ func main() {
 		os.Exit(1)
 	}
 	llmClient.(*llm.OpenAIClient).ImageTokenEstimate = imageTokenEstimate
+	llmClient.(*llm.OpenAIClient).APIKey = cfg.LLM.APIKey
 
 	// Initialize Session Manager
 	sessionMgr, err := session.NewManager(sessionDBPath, promptSet.System)

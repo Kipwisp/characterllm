@@ -23,7 +23,7 @@ It can also run entirely on your own hardware: the bot uses the OpenAI-compatibl
 
 ### LLM APIs
 
-Only **OpenAI-compatible chat completions** endpoints like llama.cpp (`POST /v1/chat/completions`) are supported, configured with `LLM_URL` and `LLM_MODEL`. Note that the bot does not send an auth header currently, so the endpoint must be reachable without a key.
+Only **OpenAI-compatible chat completions** endpoints like llama.cpp (`POST /v1/chat/completions`) are supported, configured with `LLM_URL` and `LLM_MODEL`.
 
 ### Search Providers
 
@@ -87,6 +87,7 @@ docker compose up -d --build
 | Variable | Default | Description |
 | --- | --- | --- |
 | `LLM_URL` | `http://localhost:8080/v1/chat/completions` | OpenAI-compatible chat completions endpoint. |
+| `LLM_API_KEY` | *(empty)* | When set, sent as a `Bearer` Authorization header on every LLM request. |
 | `LLM_MODEL` | *(empty)* | Model name to send to the LLM (it should match a model name the LLM endpoint defines). |
 | `LLM_MAX_CONTEXT` | `10000` | Model context window in tokens. |
 | `LLM_COMPACTION_THRESHOLD` | `0.9` | Compaction soft target in [0, 1]: compaction runs when the full prompt exceeds `LLM_MAX_CONTEXT × threshold`. |
