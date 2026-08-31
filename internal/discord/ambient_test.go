@@ -98,7 +98,7 @@ func TestAmbientTick_TopicMode(t *testing.T) {
 		return "A fresh thought.", "", nil
 	}
 
-	a.tick(context.Background(), guildID, "chan1")
+	a.tick(context.Background(), guildID, []string{"chan1"})
 
 	if replyCalled {
 		t.Error("expected a plain channel send, got a reply")
@@ -152,7 +152,7 @@ func TestAmbientTick_ReplyMode(t *testing.T) {
 		return "I got a DNF.", "", nil
 	}
 
-	a.tick(context.Background(), guildID, "chan1")
+	a.tick(context.Background(), guildID, []string{"chan1"})
 
 	ctx := context.Background()
 	history, err := sm.GetHistory(ctx, guildID, "1", 10, 0)
@@ -183,7 +183,7 @@ func TestAmbientTick_EmptyTranscriptFallsBackToTopic(t *testing.T) {
 		return "hi", "", nil
 	}
 
-	a.tick(context.Background(), guildID, "chan1")
+	a.tick(context.Background(), guildID, []string{"chan1"})
 
 	ctx := context.Background()
 	history, err := sm.GetHistory(ctx, guildID, "1", 10, 0)
@@ -230,7 +230,7 @@ func TestAmbientTick_TranscriptExcludesAddressedMessages(t *testing.T) {
 		return "nice", "", nil
 	}
 
-	a.tick(context.Background(), guildID, "chan1")
+	a.tick(context.Background(), guildID, []string{"chan1"})
 
 	ctx := context.Background()
 	history, err := sm.GetHistory(ctx, guildID, "1", 10, 0)
@@ -268,7 +268,7 @@ func TestAmbientTick_AllAddressedTranscriptFallsBackToTopic(t *testing.T) {
 		return "hi", "", nil
 	}
 
-	a.tick(context.Background(), guildID, "chan1")
+	a.tick(context.Background(), guildID, []string{"chan1"})
 
 	ctx := context.Background()
 	history, err := sm.GetHistory(ctx, guildID, "1", 10, 0)
@@ -295,7 +295,7 @@ func TestAmbientTick_TranscriptFetchFailure(t *testing.T) {
 		return "hi", "", nil
 	}
 
-	a.tick(context.Background(), guildID, "chan1")
+	a.tick(context.Background(), guildID, []string{"chan1"})
 
 	if llmCalls != 0 {
 		t.Error("expected no LLM call when the transcript fetch fails")
@@ -316,7 +316,7 @@ func TestAmbientTick_NoActiveCharacter(t *testing.T) {
 		return "hi", "", nil
 	}
 
-	a.tick(context.Background(), "guild-nobody", "chan1")
+	a.tick(context.Background(), "guild-nobody", []string{"chan1"})
 
 	if llmCalls != 0 {
 		t.Error("expected no LLM call without an active character")
@@ -372,7 +372,7 @@ func TestAmbientTick_TranscriptImages(t *testing.T) {
 		return nil, nil
 	}
 
-	a.tick(context.Background(), guildID, "chan1")
+	a.tick(context.Background(), guildID, []string{"chan1"})
 
 	current := lastPrompt[len(lastPrompt)-1]
 	if len(current.Images) != 2 || current.Images[0] != "data:https://x/1.png" || current.Images[1] != "data:https://x/2.jpg" {
@@ -413,7 +413,7 @@ func TestAmbientTick_TranscriptImagesVisionDisabled(t *testing.T) {
 		return nil, nil
 	}
 
-	a.tick(context.Background(), guildID, "chan1")
+	a.tick(context.Background(), guildID, []string{"chan1"})
 
 	if images := lastPrompt[len(lastPrompt)-1].Images; len(images) != 0 {
 		t.Errorf("expected no images with vision disabled, got %v", images)
@@ -424,8 +424,8 @@ func TestAmbientRun_ProbabilityGateAndShutdown(t *testing.T) {
 	a, s, _, sm, _, rolls := setupAmbient(t, config.AmbientConfig{TickProbability: 0})
 	guildID := "guild1"
 	setActiveCharacter(t, sm, guildID)
-	if err := sm.SetAmbientChannel(context.Background(), guildID, "chan1"); err != nil {
-		t.Fatalf("SetAmbientChannel failed: %v", err)
+	if err := sm.AddAmbientChannel(context.Background(), guildID, "chan1"); err != nil {
+		t.Fatalf("AddAmbientChannel failed: %v", err)
 	}
 	rolls.values = []float64{0.5}
 
@@ -459,8 +459,8 @@ func TestAmbientRun_ClearDuringSleep(t *testing.T) {
 	a, s, llmMock, sm, _, rolls := setupAmbient(t, config.AmbientConfig{MinSeconds: 0, MaxSeconds: 1, TickProbability: 1})
 	guildID := "guild1"
 	setActiveCharacter(t, sm, guildID)
-	if err := sm.SetAmbientChannel(context.Background(), guildID, "chan1"); err != nil {
-		t.Fatalf("SetAmbientChannel failed: %v", err)
+	if err := sm.AddAmbientChannel(context.Background(), guildID, "chan1"); err != nil {
+		t.Fatalf("AddAmbientChannel failed: %v", err)
 	}
 	rolls.values = []float64{0.99, 0.1} // first roll: ~1s deadline; then topic mode
 
@@ -475,7 +475,7 @@ func TestAmbientRun_ClearDuringSleep(t *testing.T) {
 
 	go func() {
 		time.Sleep(100 * time.Millisecond)
-		sm.SetAmbientChannel(context.Background(), guildID, "")
+		sm.ClearAmbientChannels(context.Background(), guildID)
 	}()
 
 	runCtx, cancel := context.WithCancel(context.Background())
@@ -504,8 +504,8 @@ func TestAmbientRun_PerGuildScheduling(t *testing.T) {
 	ctx := context.Background()
 	for _, guildID := range []string{"guild-a", "guild-b"} {
 		setActiveCharacter(t, sm, guildID)
-		if err := sm.SetAmbientChannel(ctx, guildID, "chan-"+guildID); err != nil {
-			t.Fatalf("SetAmbientChannel failed: %v", err)
+		if err := sm.AddAmbientChannel(ctx, guildID, "chan-"+guildID); err != nil {
+			t.Fatalf("AddAmbientChannel failed: %v", err)
 		}
 	}
 	rolls.values = []float64{0.1} // topic mode
@@ -543,4 +543,228 @@ func TestAmbientRun_PerGuildScheduling(t *testing.T) {
 			t.Errorf("expected %s to speak at least once, sends: %v", channelID, sent)
 		}
 	}
+}
+
+func TestAmbientTick_TopicModeMultiChannel(t *testing.T) {
+	a, s, llmMock, sm, _, rolls := setupAmbient(t, config.AmbientConfig{ReplyCount: 5})
+	guildID := "guild1"
+	setActiveCharacter(t, sm, guildID)
+	// Mode flip: topic; fallback pick: index 1 of the sorted [chan1 chan2].
+	rolls.values = []float64{0.1, 0.9}
+
+	s.GuildChannelsFn = func(guildID string) ([]*discordgo.Channel, error) {
+		return []*discordgo.Channel{
+			{ID: "chan1", Name: "alpha", Type: discordgo.ChannelTypeGuildText},
+			{ID: "chan2", Name: "lobby", Type: discordgo.ChannelTypeGuildText},
+		}, nil
+	}
+	var sentChannel, sentContent string
+	s.ChannelMessageSendFn = func(channelID, content string) (*discordgo.Message, error) {
+		sentChannel, sentContent = channelID, content
+		return nil, nil
+	}
+	llmMock.GenerateResponseFn = func(ctx context.Context, messages []llm.Message, model string) (string, string, error) {
+		return "CHANNEL: 1\nLet us start with something.", "", nil
+	}
+
+	a.tick(context.Background(), guildID, []string{"chan1", "chan2"})
+
+	if sentChannel != "chan1" {
+		t.Errorf("expected the send routed to the CHANNEL: line's channel chan1, got %q", sentChannel)
+	}
+	if sentContent != "Let us start with something." {
+		t.Errorf("expected the CHANNEL: line stripped from the visible message, got %q", sentContent)
+	}
+
+	ctx := context.Background()
+	history, err := sm.GetHistory(ctx, guildID, "1", 10, 0)
+	if err != nil || len(history) != 2 {
+		t.Fatalf("expected 2 history rows, got %d (err %v)", len(history), err)
+	}
+	wantCue := ambientTopicCue + "\n" + ambientChannelListLabel + "\n1. #alpha\n2. #lobby\n" +
+		ambientChannelPickInstruction
+	if history[0].Role != "user" || history[0].Content != wantCue {
+		t.Errorf("unexpected user row:\n%s\nwant:\n%s", history[0].Content, wantCue)
+	}
+	if history[1].Role != "assistant" || history[1].Content != "Let us start with something." {
+		t.Errorf("expected the stored assistant row stripped, got %q", history[1].Content)
+	}
+}
+
+func TestAmbientTick_TopicModeMultiChannelNoLine(t *testing.T) {
+	a, s, llmMock, sm, _, rolls := setupAmbient(t, config.AmbientConfig{ReplyCount: 5})
+	guildID := "guild1"
+	setActiveCharacter(t, sm, guildID)
+	// Mode flip: topic; fallback pick: index 0 of the sorted [chan1 chan2].
+	rolls.values = []float64{0.1, 0.25}
+
+	s.GuildChannelsFn = func(guildID string) ([]*discordgo.Channel, error) {
+		return []*discordgo.Channel{
+			{ID: "chan1", Name: "alpha", Type: discordgo.ChannelTypeGuildText},
+			{ID: "chan2", Name: "lobby", Type: discordgo.ChannelTypeGuildText},
+		}, nil
+	}
+	var sentChannel, sentContent string
+	s.ChannelMessageSendFn = func(channelID, content string) (*discordgo.Message, error) {
+		sentChannel, sentContent = channelID, content
+		return nil, nil
+	}
+	llmMock.GenerateResponseFn = func(ctx context.Context, messages []llm.Message, model string) (string, string, error) {
+		return "Just a thought.", "", nil
+	}
+
+	a.tick(context.Background(), guildID, []string{"chan1", "chan2"})
+
+	if sentChannel != "chan1" {
+		t.Errorf("expected the fallback channel chan1, got %q", sentChannel)
+	}
+	if sentContent != "Just a thought." {
+		t.Errorf("expected the message intact, got %q", sentContent)
+	}
+}
+
+func TestAmbientTick_TopicModeMultiChannelUnknownChannel(t *testing.T) {
+	a, s, llmMock, sm, _, rolls := setupAmbient(t, config.AmbientConfig{ReplyCount: 5})
+	guildID := "guild1"
+	setActiveCharacter(t, sm, guildID)
+	// Mode flip: topic; fallback pick: index 1 of the sorted [chan1 chan2].
+	rolls.values = []float64{0.1, 0.9}
+
+	s.GuildChannelsFn = func(guildID string) ([]*discordgo.Channel, error) {
+		return []*discordgo.Channel{
+			{ID: "chan1", Name: "alpha", Type: discordgo.ChannelTypeGuildText},
+			{ID: "chan2", Name: "lobby", Type: discordgo.ChannelTypeGuildText},
+		}, nil
+	}
+	var sentChannel, sentContent string
+	s.ChannelMessageSendFn = func(channelID, content string) (*discordgo.Message, error) {
+		sentChannel, sentContent = channelID, content
+		return nil, nil
+	}
+	llmMock.GenerateResponseFn = func(ctx context.Context, messages []llm.Message, model string) (string, string, error) {
+		return "CHANNEL: 9\nA wandering line.", "", nil
+	}
+
+	a.tick(context.Background(), guildID, []string{"chan1", "chan2"})
+
+	if sentChannel != "chan2" {
+		t.Errorf("expected the fallback channel chan2, got %q", sentChannel)
+	}
+	if sentContent != "A wandering line." {
+		t.Errorf("expected the unusable CHANNEL: line stripped, got %q", sentContent)
+	}
+}
+
+func TestAmbientTick_TopicModeMultiChannelNamesUnresolvable(t *testing.T) {
+	a, s, llmMock, sm, _, rolls := setupAmbient(t, config.AmbientConfig{ReplyCount: 5})
+	guildID := "guild1"
+	setActiveCharacter(t, sm, guildID)
+	rolls.values = []float64{0.1, 0.9}
+
+	s.GuildChannelsFn = func(guildID string) ([]*discordgo.Channel, error) {
+		return nil, fmt.Errorf("api down")
+	}
+	var cueSent string
+	s.ChannelMessageSendFn = func(channelID, content string) (*discordgo.Message, error) {
+		return nil, nil
+	}
+	llmMock.GenerateResponseFn = func(ctx context.Context, messages []llm.Message, model string) (string, string, error) {
+		cueSent = messages[len(messages)-1].Content
+		return "CHANNEL: 2\nvia raw id", "", nil
+	}
+
+	a.tick(context.Background(), guildID, []string{"chan1", "chan2"})
+
+	want := ambientTopicCue + "\n" + ambientChannelListLabel + "\n1. chan1\n2. chan2\n" +
+		ambientChannelPickInstruction
+	if cueSent != want {
+		t.Errorf("expected the cue to fall back to raw channel IDs:\n%s\nwant:\n%s", cueSent, want)
+	}
+}
+
+func TestAmbientTick_TranscriptModePicksChannel(t *testing.T) {
+	a, s, llmMock, sm, _, rolls := setupAmbient(t, config.AmbientConfig{ReplyCount: 5})
+	guildID := "guild1"
+	setActiveCharacter(t, sm, guildID)
+	// Mode flip: transcript; channel pick: index 1 of the sorted [chan1 chan2].
+	rolls.values = []float64{0.9, 0.9}
+
+	s.ChannelMessagesFn = func(channelID string, limit int, beforeID, afterID, aroundID string) ([]*discordgo.Message, error) {
+		if channelID != "chan2" {
+			t.Errorf("expected the transcript read from the picked channel chan2, got %q", channelID)
+		}
+		return []*discordgo.Message{
+			{Content: "hello", Author: &discordgo.User{ID: "a1", Username: "Alice"}},
+		}, nil
+	}
+	var sentChannel string
+	s.ChannelMessageSendFn = func(channelID, content string) (*discordgo.Message, error) {
+		sentChannel = channelID
+		return nil, nil
+	}
+	llmMock.GenerateResponseFn = func(ctx context.Context, messages []llm.Message, model string) (string, string, error) {
+		return "hi", "", nil
+	}
+
+	a.tick(context.Background(), guildID, []string{"chan1", "chan2"})
+
+	if sentChannel != "chan2" {
+		t.Errorf("expected the reply posted to the picked channel chan2, got %q", sentChannel)
+	}
+}
+
+func TestAmbientTick_TopicModeSingleChannelNoList(t *testing.T) {
+	a, s, llmMock, sm, _, rolls := setupAmbient(t, config.AmbientConfig{ReplyCount: 5})
+	guildID := "guild1"
+	setActiveCharacter(t, sm, guildID)
+	rolls.values = []float64{0.1}
+
+	s.GuildChannelsFn = func(guildID string) ([]*discordgo.Channel, error) {
+		t.Error("GuildChannels should not be called for a single-channel topic turn")
+		return nil, nil
+	}
+	var sentChannel string
+	s.ChannelMessageSendFn = func(channelID, content string) (*discordgo.Message, error) {
+		sentChannel = channelID
+		return nil, nil
+	}
+	var lastPrompt []llm.Message
+	llmMock.GenerateResponseFn = func(ctx context.Context, messages []llm.Message, model string) (string, string, error) {
+		lastPrompt = messages
+		return "hi", "", nil
+	}
+
+	a.tick(context.Background(), guildID, []string{"chan1"})
+
+	if sentChannel != "chan1" {
+		t.Errorf("expected the send in chan1, got %q", sentChannel)
+	}
+	if got := lastPrompt[len(lastPrompt)-1].Content; got != ambientTopicCue {
+		t.Errorf("expected the plain topic cue, got %q", got)
+	}
+}
+
+func TestSplitChannelLine(t *testing.T) {
+	t.Run("channel line", func(t *testing.T) {
+		number, rest, ok := splitChannelLine("CHANNEL: 2\nbody")
+		if !ok || number != "2" || rest != "body" {
+			t.Errorf("got number=%q rest=%q ok=%v", number, rest, ok)
+		}
+	})
+	t.Run("no line", func(t *testing.T) {
+		if _, _, ok := splitChannelLine("just a message"); ok {
+			t.Error("did not expect a CHANNEL: line")
+		}
+	})
+	t.Run("line is not the first line", func(t *testing.T) {
+		if _, _, ok := splitChannelLine("body\nCHANNEL: 2"); ok {
+			t.Error("did not expect a CHANNEL: line when it is not first")
+		}
+	})
+	t.Run("line only, no body", func(t *testing.T) {
+		number, rest, ok := splitChannelLine("CHANNEL: 2")
+		if !ok || number != "2" || rest != "" {
+			t.Errorf("got number=%q rest=%q ok=%v", number, rest, ok)
+		}
+	})
 }

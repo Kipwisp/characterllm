@@ -87,7 +87,7 @@ type InviteConfig struct {
 }
 
 type AmbientConfig struct {
-	// Enabled starts the ambient scheduler and registers /setambientchannel.
+	// Enabled starts the ambient scheduler and registers /addambientchannel.
 	Enabled bool
 	// MinSeconds/MaxSeconds bound the random sleep between ambient ticks.
 	MinSeconds int

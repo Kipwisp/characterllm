@@ -2,8 +2,10 @@ package discord
 
 import (
 	"context"
+	"fmt"
 	"math/rand"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,6 +23,15 @@ import (
 const (
 	// ambientTopicCue is the synthetic user message for a fresh-topic turn.
 	ambientTopicCue = "The channel has gone quiet. Start a conversation — either a completely new topic or bringing back an old one."
+	// ambientChannelListLabel introduces the guild's ambient channels in a
+	// multi-channel topic cue; the model answers with a CHANNEL: line.
+	ambientChannelListLabel = "Ambient channels:"
+	// ambientChannelPickInstruction tells a multi-channel topic cue how to
+	// report the chosen channel.
+	ambientChannelPickInstruction = "The channel names only indicate where the message will be posted, not what it should be about: choose the topic freely, then pick the number of the channel that best fits the message — if none of them fits well, still pick the closest one, the list is only where the message goes, not a filter on the topic. Start the reply with a `CHANNEL: n` line, then the message."
+	// ambientChannelLinePrefix is the marker line the model puts before a
+	// multi-channel topic reply to give the number of the channel it chose.
+	ambientChannelLinePrefix = "CHANNEL: "
 	// ambientTranscriptHeader opens the synthetic user message for a reply turn.
 	ambientTranscriptHeader = "Messages in this channel just now:"
 	// ambientTranscriptFooter closes the transcript with the reply instruction.
@@ -28,7 +39,7 @@ const (
 )
 
 // Ambient is the scheduler that makes the guild's active character speak
-// unprompted in its ambient channel.
+// unprompted in one of its ambient channels.
 type Ambient struct {
 	Session     *session.Manager
 	Chat        *Chat
@@ -36,7 +47,7 @@ type Ambient struct {
 	ImageClient images.ImageClient
 	Discord     commands.DiscordSession
 	// Roll returns a uniform float in [0,1) for the per-guild intervals, the
-	// tick probability gate, and the mode coin flip.
+	// tick probability gate, the mode coin flip, and the channel picks.
 	Roll func() float64
 }
 
@@ -86,10 +97,10 @@ func (a *Ambient) Run(ctx context.Context) {
 			}
 		}
 
-		// The snapshot above can be stale: the channel may have been cleared
-		// or re-pointed while we slept, so re-read it before speaking.
-		channelID, ok := a.configuredGuilds(ctx)[guildID]
-		if !ok {
+		// The snapshot above can be stale: the set may have been cleared or
+		// changed while we slept, so re-read it before speaking.
+		channels, ok := a.configuredGuilds(ctx)[guildID]
+		if !ok || len(channels) == 0 {
 			delete(nextDue, guildID)
 			continue
 		}
@@ -97,7 +108,7 @@ func (a *Ambient) Run(ctx context.Context) {
 		// The tick probability gate: the wake fired, but the coin flip must
 		// pass before the bot actually speaks.
 		if a.Roll() < a.Config.Ambient.TickProbability {
-			a.tick(ctx, guildID, channelID)
+			a.tick(ctx, guildID, channels)
 		} else {
 			logger.FromContext(ctx).Debug("ambient tick skipped by probability gate", "guild_id", guildID)
 		}
@@ -105,9 +116,9 @@ func (a *Ambient) Run(ctx context.Context) {
 	}
 }
 
-// configuredGuilds returns the ambient channel per guild, or nil when the
+// configuredGuilds returns the ambient channels per guild, or nil when the
 // list cannot be read (the caller backs off and retries).
-func (a *Ambient) configuredGuilds(ctx context.Context) map[string]string {
+func (a *Ambient) configuredGuilds(ctx context.Context) map[string][]string {
 	channels, err := a.Session.ListAmbientChannels(ctx)
 	if err != nil {
 		logger.FromContext(ctx).Error("failed to list ambient channels", "error", err)
@@ -119,7 +130,7 @@ func (a *Ambient) configuredGuilds(ctx context.Context) map[string]string {
 // nextDueGuild returns the guild whose ambient turn is due earliest, dropping
 // unconfigured guilds and assigning a random first-due time (in sorted guild
 // order) to any guild seen for the first time.
-func (a *Ambient) nextDueGuild(ctx context.Context, nextDue map[string]time.Time, guilds map[string]string) (string, time.Time) {
+func (a *Ambient) nextDueGuild(ctx context.Context, nextDue map[string]time.Time, guilds map[string][]string) (string, time.Time) {
 	for id := range nextDue {
 		if _, ok := guilds[id]; !ok {
 			delete(nextDue, id)
@@ -152,28 +163,18 @@ func (a *Ambient) randomInterval() time.Duration {
 	return time.Duration(seconds * float64(time.Second))
 }
 
-// pickAmbientGuild returns a random guild with an ambient channel set, or
-// ok=false when none are configured.
-func (a *Ambient) pickAmbientGuild(ctx context.Context) (string, string, bool) {
-	channels, err := a.Session.ListAmbientChannels(ctx)
-	if err != nil {
-		logger.FromContext(ctx).Error("failed to list ambient channels", "error", err)
-		return "", "", false
-	}
-	if len(channels) == 0 {
-		return "", "", false
-	}
-	guilds := make([]string, 0, len(channels))
-	for guildID := range channels {
-		guilds = append(guilds, guildID)
-	}
-	sort.Strings(guilds)
-	guildID := guilds[int(a.Roll()*float64(len(guilds)))]
-	return guildID, channels[guildID], true
+// pickChannel picks a channel from the set uniformly at random (in sorted
+// order, through the injected roll source).
+func (a *Ambient) pickChannel(channels []string) string {
+	sorted := make([]string, len(channels))
+	copy(sorted, channels)
+	sort.Strings(sorted)
+	return sorted[int(a.Roll()*float64(len(sorted)))]
 }
 
-// tick runs one ambient turn for the guild's active character.
-func (a *Ambient) tick(ctx context.Context, guildID, channelID string) {
+// tick runs one ambient turn for the guild's active character in one of the
+// guild's ambient channels.
+func (a *Ambient) tick(ctx context.Context, guildID string, channels []string) {
 	reqID := uuid.New().String()
 	ctx = logger.ToContext(ctx, logger.WithRequestID(reqID, "guild_id", guildID))
 
@@ -187,13 +188,118 @@ func (a *Ambient) tick(ctx context.Context, guildID, channelID string) {
 		return
 	}
 
-	userContent, imageDataURIs, ok := a.buildCue(ctx, channelID)
+	t, ok := a.buildTurn(ctx, guildID, channels)
 	if !ok {
 		return
 	}
 
-	logger.FromContext(ctx).Debug("ambient tick passed the check: sending message", "guild_id", guildID)
-	a.Chat.runTurn(ctx, a.Discord, guildID, channelID, userContent, imageDataURIs, nil, audit.KindAmbient, reqID)
+	logger.FromContext(ctx).Debug("ambient tick passed the check: sending message", "guild_id", guildID, "channel_id", t.ChannelID)
+	a.Chat.runTurn(ctx, a.Discord, guildID, t, audit.KindAmbient, reqID)
+}
+
+// buildTurn builds the synthetic user message and destination channel for an
+// ambient tick. The mode is a coin flip: topic mode posts a fresh
+// conversation (the model picks the channel when the guild has several),
+// transcript mode reads the recent messages of a randomly picked channel and
+// replies to them, falling back to the plain topic cue when nothing remains
+// after filtering.
+func (a *Ambient) buildTurn(ctx context.Context, guildID string, channels []string) (turn, bool) {
+	if a.Roll() < 0.5 {
+		return a.topicTurn(ctx, guildID, channels), true
+	}
+
+	channelID := a.pickChannel(channels)
+	cue, imageDataURIs, err := buildTranscriptCue(ctx, a.Discord, a.Config, a.ImageClient, channelID)
+	if err != nil {
+		logger.FromContext(ctx).Warn("ambient transcript fetch failed", "error", err)
+		return turn{}, false
+	}
+	if cue == "" {
+		return turn{ChannelID: channelID, Content: ambientTopicCue, Route: identityRoute}, true
+	}
+	return turn{ChannelID: channelID, Content: cue, Images: imageDataURIs, Route: identityRoute}, true
+}
+
+// topicTurn builds the topic-mode turn. With one ambient channel the turn
+// posts there with the plain cue; with several, the cue lists the channels
+// and the model chooses the destination via a CHANNEL: line.
+func (a *Ambient) topicTurn(ctx context.Context, guildID string, channels []string) turn {
+	if len(channels) == 1 {
+		return turn{ChannelID: channels[0], Content: ambientTopicCue, Route: identityRoute}
+	}
+	list := make([]string, len(channels))
+	for i, name := range a.channelNames(ctx, guildID, channels) {
+		list[i] = fmt.Sprintf("%d. %s", i+1, name)
+	}
+	content := ambientTopicCue + "\n" + ambientChannelListLabel + "\n" + strings.Join(list, "\n") +
+		"\n" + ambientChannelPickInstruction
+	return turn{
+		ChannelID: a.pickChannel(channels),
+		Content:   content,
+		Route:     a.channelRoute(ctx, channels),
+	}
+}
+
+// channelNames resolves the channel IDs to "#name" labels for the topic cue
+// (falling back to the raw ID when the guild's channel list cannot be read
+// or does not contain the ID).
+func (a *Ambient) channelNames(ctx context.Context, guildID string, channelIDs []string) []string {
+	nameByID := make(map[string]string, len(channelIDs))
+	if channels, err := a.Discord.GuildChannels(guildID); err == nil {
+		for _, ch := range channels {
+			if ch.Type == discordgo.ChannelTypeGuildText {
+				nameByID[ch.ID] = "#" + ch.Name
+			}
+		}
+	} else {
+		logger.FromContext(ctx).Warn("failed to list guild channels for the ambient topic cue", "guild_id", guildID, "error", err)
+	}
+
+	names := make([]string, len(channelIDs))
+	for i, id := range channelIDs {
+		name, ok := nameByID[id]
+		if !ok {
+			name = id
+		}
+		names[i] = name
+	}
+	return names
+}
+
+// channelRoute re-points a multi-channel topic turn's send from the
+// `CHANNEL: n` line the model puts before its message (n is the number of a
+// channel in the cue's list), falling back to the turn's default channel
+// when the line is missing or is not a valid in-range number.
+func (a *Ambient) channelRoute(ctx context.Context, channels []string) TurnRoute {
+	return func(content, fallback string) (string, string) {
+		number, rest, hasLine := splitChannelLine(content)
+		if !hasLine {
+			return content, fallback
+		}
+		number = strings.TrimSpace(number)
+		if number == "" {
+			return content, fallback
+		}
+		n, err := strconv.Atoi(number)
+		if err != nil || n < 1 || n > len(channels) {
+			logger.FromContext(ctx).Warn("ambient topic reply picked a channel number outside the list; using the fallback channel", "pick", number)
+			return rest, fallback
+		}
+		return rest, channels[n-1]
+	}
+}
+
+// splitChannelLine reports whether the reply's first line is a CHANNEL: line
+// and, when it is, returns the channel number as written and the reply with
+// the line removed.
+func splitChannelLine(reply string) (number, rest string, ok bool) {
+	lines := strings.SplitN(reply, "\n", 2)
+	first := strings.TrimSpace(lines[0])
+	if len(lines) == 2 {
+		rest = lines[1]
+	}
+	number, found := strings.CutPrefix(first, ambientChannelLinePrefix)
+	return number, rest, found
 }
 
 // buildTranscriptCue fetches the channel's recent messages and builds the
@@ -212,25 +318,6 @@ func buildTranscriptCue(ctx context.Context, s commands.DiscordSession, cfg *con
 	}
 	content := ambientTranscriptHeader + "\n" + strings.Join(lines, "\n") + "\n" + ambientTranscriptFooter
 	return content, collectImageURIs(ctx, imageClient, imageURLs), nil
-}
-
-// buildCue builds the synthetic user message (and any transcript images) for
-// an ambient tick. The mode is a coin flip; an empty transcript falls back to
-// the topic cue.
-func (a *Ambient) buildCue(ctx context.Context, channelID string) (string, []string, bool) {
-	if a.Roll() < 0.5 {
-		return ambientTopicCue, nil, true
-	}
-
-	cue, imageDataURIs, err := buildTranscriptCue(ctx, a.Discord, a.Config, a.ImageClient, channelID)
-	if err != nil {
-		logger.FromContext(ctx).Warn("ambient transcript fetch failed", "error", err)
-		return "", nil, false
-	}
-	if cue == "" {
-		return ambientTopicCue, nil, true
-	}
-	return cue, imageDataURIs, true
 }
 
 // extractTranscript formats the channel chatter as "Name: message" lines and

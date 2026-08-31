@@ -2,8 +2,6 @@ package session
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"fmt"
 )
 
@@ -11,54 +9,89 @@ import (
 // active character.
 type guildStore struct{ *core }
 
-// SetAmbientChannel sets the guild's ambient channel, or clears it when
-// channelID is empty.
-func (s *guildStore) SetAmbientChannel(ctx context.Context, guildID, channelID string) error {
+// AddAmbientChannel inserts a channel into the guild's ambient set; adding
+// a member that is already present is a no-op.
+func (s *guildStore) AddAmbientChannel(ctx context.Context, guildID, channelID string) error {
+	if channelID == "" {
+		return fmt.Errorf("failed to add ambient channel for guild %s: channel ID is required", guildID)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	_, err := s.db.ExecContext(ctx, "INSERT INTO guild_config (guild_id, ambient_channel_id) VALUES (?, ?) ON CONFLICT(guild_id) DO UPDATE SET ambient_channel_id = ?", guildID, channelID, channelID)
-	if err != nil {
-		return fmt.Errorf("failed to set ambient channel for guild %s: %w", guildID, err)
+	if _, err := s.db.ExecContext(ctx, "INSERT OR IGNORE INTO guild_ambient_channels (guild_id, channel_id) VALUES (?, ?)", guildID, channelID); err != nil {
+		return fmt.Errorf("failed to add ambient channel for guild %s: %w", guildID, err)
 	}
 	return nil
 }
 
-// GetAmbientChannel returns the guild's ambient channel ID, or "" when unset.
-func (s *guildStore) GetAmbientChannel(ctx context.Context, guildID string) (string, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+// RemoveAmbientChannel removes one channel from the guild's ambient set;
+// removing a channel that is not present is a no-op.
+func (s *guildStore) RemoveAmbientChannel(ctx context.Context, guildID, channelID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	var channelID string
-	err := s.db.QueryRowContext(ctx, "SELECT COALESCE(ambient_channel_id, '') FROM guild_config WHERE guild_id = ?", guildID).Scan(&channelID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
+	if _, err := s.db.ExecContext(ctx, "DELETE FROM guild_ambient_channels WHERE guild_id = ? AND channel_id = ?", guildID, channelID); err != nil {
+		return fmt.Errorf("failed to remove ambient channel for guild %s: %w", guildID, err)
 	}
-	if err != nil {
-		return "", fmt.Errorf("failed to get ambient channel for guild %s: %w", guildID, err)
-	}
-	return channelID, nil
+	return nil
 }
 
-// ListAmbientChannels returns every guild that has an ambient channel set,
-// mapped to its channel ID.
-func (s *guildStore) ListAmbientChannels(ctx context.Context) (map[string]string, error) {
+// ClearAmbientChannels removes every channel from the guild's ambient set.
+func (s *guildStore) ClearAmbientChannels(ctx context.Context, guildID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, err := s.db.ExecContext(ctx, "DELETE FROM guild_ambient_channels WHERE guild_id = ?", guildID); err != nil {
+		return fmt.Errorf("failed to clear ambient channels for guild %s: %w", guildID, err)
+	}
+	return nil
+}
+
+// GetAmbientChannels returns the guild's ambient channel IDs sorted, or an
+// empty slice when none are set.
+func (s *guildStore) GetAmbientChannels(ctx context.Context, guildID string) ([]string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	rows, err := s.db.QueryContext(ctx, "SELECT guild_id, ambient_channel_id FROM guild_config WHERE ambient_channel_id IS NOT NULL AND ambient_channel_id != ''")
+	rows, err := s.db.QueryContext(ctx, "SELECT channel_id FROM guild_ambient_channels WHERE guild_id = ? ORDER BY channel_id", guildID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get ambient channels for guild %s: %w", guildID, err)
+	}
+	defer rows.Close()
+
+	channels := []string{}
+	for rows.Next() {
+		var channelID string
+		if err := rows.Scan(&channelID); err != nil {
+			return nil, fmt.Errorf("failed to scan ambient channel row: %w", err)
+		}
+		channels = append(channels, channelID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate ambient channel rows: %w", err)
+	}
+	return channels, nil
+}
+
+// ListAmbientChannels returns every guild that has at least one ambient
+// channel, mapped to its sorted channel IDs.
+func (s *guildStore) ListAmbientChannels(ctx context.Context) (map[string][]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	rows, err := s.db.QueryContext(ctx, "SELECT guild_id, channel_id FROM guild_ambient_channels ORDER BY guild_id, channel_id")
 	if err != nil {
 		return nil, fmt.Errorf("failed to list ambient channels: %w", err)
 	}
 	defer rows.Close()
 
-	channels := make(map[string]string)
+	channels := make(map[string][]string)
 	for rows.Next() {
 		var guildID, channelID string
 		if err := rows.Scan(&guildID, &channelID); err != nil {
 			return nil, fmt.Errorf("failed to scan ambient channel row: %w", err)
 		}
-		channels[guildID] = channelID
+		channels[guildID] = append(channels[guildID], channelID)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("failed to iterate ambient channel rows: %w", err)

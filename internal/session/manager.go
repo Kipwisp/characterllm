@@ -104,8 +104,12 @@ func (m *Manager) initDB() error {
 	queries := []string{
 		`CREATE TABLE IF NOT EXISTS guild_config (
 			guild_id TEXT PRIMARY KEY,
-			active_character_id TEXT,
-			ambient_channel_id TEXT
+			active_character_id TEXT
+		);`,
+		`CREATE TABLE IF NOT EXISTS guild_ambient_channels (
+			guild_id TEXT,
+			channel_id TEXT,
+			PRIMARY KEY (guild_id, channel_id)
 		);`,
 		`CREATE TABLE IF NOT EXISTS character_cards (
 			guild_id TEXT,

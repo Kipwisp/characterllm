@@ -644,7 +644,11 @@ func TestProcessChat_Error(t *testing.T) {
 	}
 	m.GuildID = "guild1"
 
-	err := c.processChat(context.Background(), s, m.GuildID, m.ChannelID, &discordgo.MessageReference{MessageID: m.ID}, "", "char1", "prompt", []llm.Message{}, "req1", audit.KindChat)
+	err := c.processChat(context.Background(), s, m.GuildID, turn{
+		ChannelID: m.ChannelID,
+		ReplyRef:  &discordgo.MessageReference{MessageID: m.ID},
+		Route:     identityRoute,
+	}, "", "char1", "prompt", []llm.Message{}, "req1", audit.KindChat)
 
 	if err == nil {
 		t.Error("Expected error, got nil")
@@ -956,8 +960,8 @@ func TestHandleMessageCreate_AmbientReplyGatePasses(t *testing.T) {
 		Description: "A test character",
 	})
 	sm.SetActiveCharacter(ctx, guildID, charID)
-	if err := sm.SetAmbientChannel(ctx, guildID, "chan1"); err != nil {
-		t.Fatalf("SetAmbientChannel failed: %v", err)
+	if err := sm.AddAmbientChannel(ctx, guildID, "chan1"); err != nil {
+		t.Fatalf("AddAmbientChannel failed: %v", err)
 	}
 
 	auditDir := t.TempDir()
@@ -1026,8 +1030,8 @@ func TestHandleMessageCreate_AmbientReplyGateFails(t *testing.T) {
 		Description: "A test character",
 	})
 	sm.SetActiveCharacter(ctx, guildID, charID)
-	if err := sm.SetAmbientChannel(ctx, guildID, "chan1"); err != nil {
-		t.Fatalf("SetAmbientChannel failed: %v", err)
+	if err := sm.AddAmbientChannel(ctx, guildID, "chan1"); err != nil {
+		t.Fatalf("AddAmbientChannel failed: %v", err)
 	}
 
 	c.Roll = func() float64 { return 0.9 }
@@ -1071,8 +1075,8 @@ func TestHandleMessageCreate_AmbientReplyOutsideAmbientChannel(t *testing.T) {
 		})
 		sm.SetActiveCharacter(ctx, guildID, charID)
 		if setChannel {
-			if err := sm.SetAmbientChannel(ctx, guildID, "other"); err != nil {
-				t.Fatalf("SetAmbientChannel failed: %v", err)
+			if err := sm.AddAmbientChannel(ctx, guildID, "other"); err != nil {
+				t.Fatalf("AddAmbientChannel failed: %v", err)
 			}
 		}
 
@@ -1098,6 +1102,50 @@ func TestHandleMessageCreate_AmbientReplyOutsideAmbientChannel(t *testing.T) {
 	t.Run("different ambient channel", func(t *testing.T) { run(t, true) })
 }
 
+func TestHandleMessageCreate_AmbientReplySecondChannel(t *testing.T) {
+	// A message in the guild's second ambient channel rolls the gate exactly
+	// like one in the first.
+	c, llmMock, sm, dbPath := setupAmbientReplyChat(t)
+	defer os.Remove(dbPath)
+
+	ctx := context.Background()
+	guildID := "guild1"
+	charID := "char1"
+	sm.SaveCharacterCard(ctx, guildID, &session.CharacterCard{
+		CharacterID: charID,
+		DisplayName: "TestChar",
+		Description: "A test character",
+	})
+	sm.SetActiveCharacter(ctx, guildID, charID)
+	if err := sm.AddAmbientChannel(ctx, guildID, "other"); err != nil {
+		t.Fatalf("AddAmbientChannel failed: %v", err)
+	}
+	if err := sm.AddAmbientChannel(ctx, guildID, "chan1"); err != nil {
+		t.Fatalf("AddAmbientChannel failed: %v", err)
+	}
+
+	c.Roll = func() float64 { return 0.1 }
+
+	sentResponse := ""
+	s := mockTranscriptSession()
+	s.ChannelMessageSendReplyFn = func(channelID string, content string, response *discordgo.MessageReference) (*discordgo.Message, error) {
+		if channelID != "chan1" {
+			t.Errorf("expected the reply in chan1, got %q", channelID)
+		}
+		sentResponse = content
+		return nil, nil
+	}
+	llmMock.GenerateResponseFn = func(ctx context.Context, messages []llm.Message, model string) (string, string, error) {
+		return "Sure, tomorrow works.", "", nil
+	}
+
+	c.Handle(s, newAmbientReplyMessage())
+
+	if sentResponse != "Sure, tomorrow works." {
+		t.Errorf("Expected the ambient reply turn to run in the second ambient channel, got %q", sentResponse)
+	}
+}
+
 func TestHandleMessageCreate_MentionPlusReplyRunsOneTurn(t *testing.T) {
 	c, llmMock, sm, dbPath := setupAmbientReplyChat(t)
 	defer os.Remove(dbPath)
@@ -1111,8 +1159,8 @@ func TestHandleMessageCreate_MentionPlusReplyRunsOneTurn(t *testing.T) {
 		Description: "A test character",
 	})
 	sm.SetActiveCharacter(ctx, guildID, charID)
-	if err := sm.SetAmbientChannel(ctx, guildID, "chan1"); err != nil {
-		t.Fatalf("SetAmbientChannel failed: %v", err)
+	if err := sm.AddAmbientChannel(ctx, guildID, "chan1"); err != nil {
+		t.Fatalf("AddAmbientChannel failed: %v", err)
 	}
 
 	c.Roll = func() float64 { return 0.0 }
@@ -1166,8 +1214,8 @@ func TestHandleMessageCreate_AmbientReplyEmptyTranscript(t *testing.T) {
 		Description: "A test character",
 	})
 	sm.SetActiveCharacter(ctx, guildID, charID)
-	if err := sm.SetAmbientChannel(ctx, guildID, "chan1"); err != nil {
-		t.Fatalf("SetAmbientChannel failed: %v", err)
+	if err := sm.AddAmbientChannel(ctx, guildID, "chan1"); err != nil {
+		t.Fatalf("AddAmbientChannel failed: %v", err)
 	}
 
 	c.Roll = func() float64 { return 0.1 }
@@ -1215,8 +1263,8 @@ func TestHandleMessageCreate_AmbientReplyPlainMessage(t *testing.T) {
 		Description: "A test character",
 	})
 	sm.SetActiveCharacter(ctx, guildID, charID)
-	if err := sm.SetAmbientChannel(ctx, guildID, "chan1"); err != nil {
-		t.Fatalf("SetAmbientChannel failed: %v", err)
+	if err := sm.AddAmbientChannel(ctx, guildID, "chan1"); err != nil {
+		t.Fatalf("AddAmbientChannel failed: %v", err)
 	}
 
 	c.Roll = func() float64 { return 0.1 }

@@ -896,3 +896,19 @@ func markSpecChanges(oldSpec, newSpec string) string {
 
 	return strings.Join(parts, "\n\n")
 }
+
+// ambientChannelName resolves a channel ID to a "#name" for the
+// confirmation reply, falling back to the ID when the lookup fails.
+func ambientChannelName(ctx context.Context, s DiscordSession, guildID, channelID string) string {
+	channels, err := s.GuildChannels(guildID)
+	if err != nil {
+		logger.FromContext(ctx).Warn("failed to list guild channels", "error", err)
+		return channelID
+	}
+	for _, ch := range channels {
+		if ch.ID == channelID {
+			return "#" + ch.Name
+		}
+	}
+	return channelID
+}

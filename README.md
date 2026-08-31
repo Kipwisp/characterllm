@@ -8,7 +8,7 @@ Conversations persist per character and per thread: the bot remembers what has h
 - **Chat in any channel or thread**: mention the bot or reply to it and it answers in character.
 - `/newthread` / `/setthread`: keep several separate conversations going with the same character and jump between them; each one has its own memory.
 - `/editcharacter`: reshape the persona on the fly ("make him a little more patient") with a preview you can accept or reject before it's saved.
-- **Let them talk back**: point `/setambientchannel` at a channel and the character will occasionally strike up a conversation on their own.
+- **Let them talk back**: add a text channel with `/addambientchannel` and the character will occasionally strike up a conversation on its own inside that channel.
 
 It can also run entirely on your own hardware: the bot uses the OpenAI-compatible chat completions API, so any local model server works out of the box. For example, start llama.cpp's server with a GGUF model (`./llama-server -m model.gguf --port 8080`) and point `LLM_URL` at `http://localhost:8080/v1/chat/completions`; vLLM, LM Studio, and Ollama work the same way.
 
@@ -131,12 +131,12 @@ docker compose up -d --build
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `AMBIENT_ENABLED` | `true` | Starts the ambient scheduler and registers `/setambientchannel`; when false the bot never speaks on its own. |
+| `AMBIENT_ENABLED` | `true` | Starts the ambient scheduler and registers `/addambientchannel` and `/removeambientchannel`; when false the bot never speaks on its own. |
 | `AMBIENT_MIN_SECONDS` | `14400` | Minimum of the random per-guild interval (4 h) between ambient ticks. |
 | `AMBIENT_MAX_SECONDS` | `21600` | Maximum of the random per-guild interval (6 h) between ambient ticks; clamped to at least `AMBIENT_MIN_SECONDS`. |
 | `AMBIENT_REPLY_COUNT` | `5` | How many recent channel messages the ambient reply-mode transcript reads. |
 | `AMBIENT_TICK_PROBABILITY` | `0.5` | Chance in [0, 1] that a wake actually produces an ambient message. |
-| `AMBIENT_REPLY_PROBABILITY` | `0.1` | Chance in [0, 1] that the bot joins a user message that does not address it, in the ambient channel. |
+| `AMBIENT_REPLY_PROBABILITY` | `0.1` | Chance in [0, 1] that the bot joins a user message that does not address it, in any ambient channel. |
 
 ### Logging
 

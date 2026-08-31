@@ -163,13 +163,21 @@ var (
 	}
 
 	AmbientChannel = struct {
-		Success string
-		Cleared string
-		Error   string
+		Added      string
+		Removed    string
+		Cleared    string
+		NoneSet    string
+		NotMember  string
+		AlreadySet string
+		Error      string
 	}{
-		Success: "I'll occasionally speak on my own in %s, as the active character.",
-		Cleared: "Ambient channel cleared — I'll stop speaking on my own.",
-		Error:   "Sorry, I couldn't update the ambient channel.",
+		Added:      "%s added to ambient channels — I'll occasionally speak on my own there, as the active character.",
+		Removed:    "%s removed from ambient channels.",
+		Cleared:    "Ambient channels cleared — I'll stop speaking on my own.",
+		NoneSet:    "No ambient channels are set for this guild.",
+		NotMember:  "%s is not an ambient channel.",
+		AlreadySet: "%s is already an ambient channel.",
+		Error:      "Sorry, I couldn't update the ambient channels.",
 	}
 
 	DeleteThread = struct {

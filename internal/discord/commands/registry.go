@@ -82,7 +82,8 @@ func New(d Deps) *Registry {
 		cmds = append(cmds, &inviteCmd{clientID: d.Config.Discord.ClientID})
 	}
 	if d.Config != nil && d.Config.Ambient.Enabled {
-		cmds = append(cmds, &ambientChannelCmd{session: d.Session})
+		cmds = append(cmds, &addAmbientChannelCmd{session: d.Session})
+		cmds = append(cmds, &removeAmbientChannelCmd{session: d.Session})
 	}
 	for _, cmd := range []slashCommand{
 		&clearThreadCmd{session: d.Session, lock: d.Lock},
@@ -136,8 +137,10 @@ func (r *Registry) HandleAutocomplete(ctx context.Context, s DiscordSession, i *
 
 	var choices []*discordgo.ApplicationCommandOptionChoice
 	switch data.Name {
-	case "setambientchannel":
+	case "addambientchannel":
 		choices = autocompleteAmbientChannels(ctx, r.session, s, i.GuildID, data.Options[0].StringValue())
+	case "removeambientchannel":
+		choices = autocompleteRemoveAmbientChannels(ctx, r.session, s, i.GuildID, data.Options[0].StringValue())
 	case "setthread", "deletethread":
 		choices = autocompleteThreads(ctx, r.session, i.GuildID, data.Options[0].StringValue(), data.Name == "deletethread")
 	case "viewcharacterdetails", "deletecharacter", "editcharacter":

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -63,12 +64,18 @@ func (c *Chat) Handle(s commands.DiscordSession, m *discordgo.MessageCreate) {
 		kind = audit.KindAmbientReply
 	}
 
-	c.runTurn(ctx, s, m.GuildID, m.ChannelID, prompt, imageDataURIs, &discordgo.MessageReference{MessageID: m.ID}, kind, reqID)
+	c.runTurn(ctx, s, m.GuildID, turn{
+		ChannelID: m.ChannelID,
+		Content:   prompt,
+		Images:    imageDataURIs,
+		ReplyRef:  &discordgo.MessageReference{MessageID: m.ID},
+		Route:     identityRoute,
+	}, kind, reqID)
 }
 
-// ambientReplyPrompt applies the ambient reply chance: in the guild's
-// ambient channel, any user message that does not address the bot gives the
-// bot a probability-gated chance to join in.
+// ambientReplyPrompt applies the ambient reply chance: in one of the
+// guild's ambient channels, any user message that does not address the bot
+// gives the bot a probability-gated chance to join in.
 func (c *Chat) ambientReplyPrompt(ctx context.Context, s commands.DiscordSession, m *discordgo.MessageCreate) (string, []string, bool) {
 	if !c.Config.Ambient.Enabled {
 		return "", nil, false
@@ -76,12 +83,12 @@ func (c *Chat) ambientReplyPrompt(ctx context.Context, s commands.DiscordSession
 	if strings.Contains(m.Content, s.GetUserMention()) {
 		return "", nil, false
 	}
-	channelID, err := c.Session.GetAmbientChannel(ctx, m.GuildID)
+	channelIDs, err := c.Session.GetAmbientChannels(ctx, m.GuildID)
 	if err != nil {
-		logger.FromContext(ctx).Error("failed to read ambient channel", "error", err)
+		logger.FromContext(ctx).Error("failed to read ambient channels", "error", err)
 		return "", nil, false
 	}
-	if channelID != m.ChannelID {
+	if !slices.Contains(channelIDs, m.ChannelID) {
 		return "", nil, false
 	}
 	if c.roll() >= c.Config.Ambient.ReplyProbability {
@@ -111,17 +118,40 @@ func (c *Chat) roll() float64 {
 	return rand.Float64()
 }
 
+// TurnRoute finalizes a turn's reply after generation: it sees the
+// image-note-stripped reply and returns the (possibly trimmed) content and
+// the channel to send to.
+type TurnRoute func(content, channelID string) (string, string)
+
+// identityRoute is the TurnRoute for ordinary turns: the reply goes out as
+// generated, to the channel the turn was prepared for.
+var identityRoute TurnRoute = func(content, channelID string) (string, string) {
+	return content, channelID
+}
+
+// turn is one fully prepared conversation turn: what to say, where to send
+// it, and how to finalize the reply before it is stored and sent.
+type turn struct {
+	ChannelID string
+	Content   string
+	Images    []string
+	ReplyRef  *discordgo.MessageReference // nil → plain message, not a reply
+	Route     TurnRoute
+}
+
 // runTurn executes one full conversation turn: resolve the active character
 // and thread, persist the user message, assemble the prompt, generate and
 // send the reply, persist it, and compact when the budget demands it. A nil
-// replyRef sends the reply as a plain channel message instead of a reply.
-func (c *Chat) runTurn(ctx context.Context, s commands.DiscordSession, guildID, channelID, userContent string, images []string, replyRef *discordgo.MessageReference, kind audit.Kind, reqID string) {
-	s.ChannelTyping(channelID)
+// turn.ReplyRef sends the reply as a plain channel message instead of a
+// reply; turn.Route finalizes the reply (content and send channel) after
+// generation.
+func (c *Chat) runTurn(ctx context.Context, s commands.DiscordSession, guildID string, t turn, kind audit.Kind, reqID string) {
+	s.ChannelTyping(t.ChannelID)
 
 	details, err := c.getActiveCharacter(ctx, guildID)
 	if err != nil {
 		logger.FromContext(ctx).Error("error getting active character", "error", err)
-		if err := c.sendTurnMessage(ctx, s, channelID, replyRef, responses.General.NoCharacterSet); err != nil {
+		if err := c.sendTurnMessage(ctx, s, t.ChannelID, t.ReplyRef, responses.General.NoCharacterSet); err != nil {
 			logger.FromContext(ctx).Error("failed to send turn message", "error", err)
 		}
 		return
@@ -142,9 +172,9 @@ func (c *Chat) runTurn(ctx context.Context, s commands.DiscordSession, guildID, 
 	defer c.Locks.Lock(guildID, threadID)()
 
 	// Persist the incoming message before assembling the prompt
-	userMsg := llm.Message{Role: "user", Content: userContent, Images: images}
+	userMsg := llm.Message{Role: "user", Content: t.Content, Images: t.Images}
 	userTokens := c.LLM.EstimateTokens(ctx, []llm.Message{userMsg})
-	if err := c.Session.SaveMessage(ctx, guildID, threadID, "user", userContent); err != nil {
+	if err := c.Session.SaveMessage(ctx, guildID, threadID, "user", t.Content); err != nil {
 		logger.FromContext(ctx).Error("error saving user message", "error", err)
 	}
 	if err := c.Session.TouchThread(ctx, guildID, details.CharacterID, threadID); err != nil {
@@ -153,17 +183,17 @@ func (c *Chat) runTurn(ctx context.Context, s commands.DiscordSession, guildID, 
 
 	// compactionNeeded is true when the prompt exceeded the compaction target,
 	// which triggers compaction after the reply.
-	messages, compactionNeeded, err := c.PromptBuilder.Build(ctx, guildID, threadID, details, userContent, images, userTokens)
+	messages, compactionNeeded, err := c.PromptBuilder.Build(ctx, guildID, threadID, details, t.Content, t.Images, userTokens)
 	if err != nil {
 		logger.FromContext(ctx).Error("error assembling prompt", "error", err)
-		if err := c.sendTurnMessage(ctx, s, channelID, replyRef, "Sorry, I had trouble remembering our conversation."); err != nil {
+		if err := c.sendTurnMessage(ctx, s, t.ChannelID, t.ReplyRef, "Sorry, I had trouble remembering our conversation."); err != nil {
 			logger.FromContext(ctx).Error("failed to send turn message", "error", err)
 		}
 		return
 	}
 
 	// Generate and send response
-	if err := c.processChat(ctx, s, guildID, channelID, replyRef, threadID, details.CharacterID, userContent, messages, reqID, kind); err != nil {
+	if err := c.processChat(ctx, s, guildID, t, threadID, details.CharacterID, t.Content, messages, reqID, kind); err != nil {
 		logger.FromContext(ctx).Error("error processing chat", "error", err)
 	}
 
@@ -254,13 +284,13 @@ func (c *Chat) getActiveCharacter(ctx context.Context, guildID string) (*session
 }
 
 // processChat handles the core cycle of generating an LLM response, logging it, and sending it to Discord.
-func (c *Chat) processChat(ctx context.Context, s commands.DiscordSession, guildID, channelID string, replyRef *discordgo.MessageReference, threadID, charID, prompt string, messages []llm.Message, reqID string, kind audit.Kind) error {
+func (c *Chat) processChat(ctx context.Context, s commands.DiscordSession, guildID string, t turn, threadID, charID, prompt string, messages []llm.Message, reqID string, kind audit.Kind) error {
 	start := time.Now()
 	// Generate response
 	fullResponse, reasoning, err := c.LLM.GenerateResponse(ctx, messages, c.Config.LLM.Model)
 	if err != nil {
 		logger.FromContext(ctx).Error("LLM response generation failed", "error", err)
-		s.ChannelMessageSend(channelID, responses.General.LLMError)
+		s.ChannelMessageSend(t.ChannelID, responses.General.LLMError)
 		return err
 	}
 	latency := time.Since(start)
@@ -284,9 +314,10 @@ func (c *Chat) processChat(ctx context.Context, s commands.DiscordSession, guild
 	if visible == "" {
 		visible = fullResponse
 	}
+	visible, t.ChannelID = t.Route(visible, t.ChannelID)
 
 	// Send the final response as a reply to the user, or plainly when there is no originating message
-	if sendErr := c.sendTurnMessage(ctx, s, channelID, replyRef, visible); sendErr != nil {
+	if sendErr := c.sendTurnMessage(ctx, s, t.ChannelID, t.ReplyRef, visible); sendErr != nil {
 		return fmt.Errorf("error sending response: %v", sendErr)
 	}
 
