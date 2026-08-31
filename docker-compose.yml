@@ -4,5 +4,9 @@ services:
     env_file: .env
     restart: unless-stopped
     volumes:
-      - ./data:/app/data
-      - ./logs:/app/logs
+      - data:/app/data
+      - logs:/app/logs
+
+volumes:
+  data:
+  logs:

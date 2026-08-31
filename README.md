@@ -63,7 +63,7 @@ go build -o bin/bot ./cmd/bot
 
 ### Running with Docker
 
-Create a `.env` with at least the variables from the [minimum working configuration](#1-clone-and-configure), then run:
+Create a `.env` with at least the variables from the [minimum working configuration](#1-clone-and-configure), then use the included `docker-compose.yml` to pull and run the pre-built image:
 
 ```yaml
 services:
@@ -72,15 +72,19 @@ services:
     env_file: .env
     restart: unless-stopped
     volumes:
-      - ./data:/app/data
-      - ./logs:/app/logs
+      - data:/app/data
+      - logs:/app/logs
+
+volumes:
+  data:
+  logs:
 ```
 
 ```sh
 docker compose up -d
 ```
 
-The `data/` volume holds the bot's session database and avatar cache; `logs/` holds audit logs when `CONVERSATION_LOG=true`.
+The `data` volume holds the bot's session database and avatar cache; `logs` holds audit logs when `CONVERSATION_LOG=true`.
 
 To build the image from source instead, use the included `Dockerfile`:
 
