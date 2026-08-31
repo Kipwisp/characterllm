@@ -165,7 +165,7 @@ func (c *editCharacterCmd) Execute(ctx context.Context, s DiscordSession, i *dis
 				Flags:   flags,
 			},
 		}); err != nil {
-			logger.FromContext(ctx).Error("failed to acknowledge edit character command", "error", err, "guild_id", i.GuildID)
+			logger.FromContext(ctx).Error("failed to acknowledge edit character command", "error", err)
 		}
 	}
 
@@ -188,7 +188,7 @@ func (c *editCharacterCmd) Execute(ctx context.Context, s DiscordSession, i *dis
 	}
 
 	if err := c.session.SaveCharacterCard(ctx, i.GuildID, card); err != nil {
-		logger.FromContext(ctx).Error("failed to save edited character card", "error", err, "characterID", card.CharacterID, "guild_id", i.GuildID)
+		logger.FromContext(ctx).Error("failed to save edited character card", "error", err, "characterID", card.CharacterID)
 		say(responses.EditCharacter.Error, discordgo.MessageFlagsEphemeral)
 		return err
 	}
@@ -197,7 +197,7 @@ func (c *editCharacterCmd) Execute(ctx context.Context, s DiscordSession, i *dis
 	details, err := c.session.GetCharacterDetails(ctx, i.GuildID)
 	if err == nil && details != nil && details.CharacterID == card.CharacterID {
 		if err := SyncGuildIdentity(ctx, c.session, c.imageClient, s, i.GuildID); err != nil {
-			logger.FromContext(ctx).Warn("failed to sync guild identity after edit", "error", err, "guild_id", i.GuildID)
+			logger.FromContext(ctx).Warn("failed to sync guild identity after edit", "error", err)
 		}
 	}
 
@@ -398,7 +398,7 @@ func (c *editCharacterCmd) handleEditAccept(ctx context.Context, s DiscordSessio
 
 	card, err := c.session.GetCharacterCard(ctx, i.GuildID, pending.characterID)
 	if err != nil || card == nil {
-		logger.FromContext(ctx).Error("failed to retrieve character for edit", "error", err, "characterID", pending.characterID, "guild_id", i.GuildID)
+		logger.FromContext(ctx).Error("failed to retrieve character for edit", "error", err, "characterID", pending.characterID)
 		c.respondExpired(ctx, s, i)
 		c.deleteCardMessages(ctx, s, i, pending.cardMessageIDs)
 		return
@@ -418,7 +418,7 @@ func (c *editCharacterCmd) handleEditAccept(ctx context.Context, s DiscordSessio
 	}
 
 	if err := c.session.SaveCharacterCard(ctx, i.GuildID, card); err != nil {
-		logger.FromContext(ctx).Error("failed to save edited character card", "error", err, "characterID", pending.characterID, "guild_id", i.GuildID)
+		logger.FromContext(ctx).Error("failed to save edited character card", "error", err, "characterID", pending.characterID)
 		c.respondExpired(ctx, s, i)
 		return
 	}
@@ -520,7 +520,7 @@ func (c *editCharacterCmd) handleEditReject(ctx context.Context, s DiscordSessio
 				Attachments: &[]*discordgo.MessageAttachment{},
 				Components:  nil,
 			}); err != nil {
-				logger.FromContext(ctx).Error("failed to update rejected proposal ack", "error", err, "guild_id", i.GuildID)
+				logger.FromContext(ctx).Error("failed to update rejected proposal ack", "error", err)
 				c.respondExpiredEphemeral(ctx, s, i)
 				c.deleteCardMessages(ctx, s, i, pending.cardMessageIDs)
 				return
@@ -529,7 +529,7 @@ func (c *editCharacterCmd) handleEditReject(ctx context.Context, s DiscordSessio
 			if err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseDeferredMessageUpdate,
 			}); err != nil {
-				logger.FromContext(ctx).Error("failed to acknowledge rejected proposal", "error", err, "guild_id", i.GuildID)
+				logger.FromContext(ctx).Error("failed to acknowledge rejected proposal", "error", err)
 			}
 			c.deleteCardMessages(ctx, s, i, pending.cardMessageIDs)
 			return
@@ -544,12 +544,12 @@ func (c *editCharacterCmd) handleEditReject(ctx context.Context, s DiscordSessio
 			Components:  nil,
 		},
 	}); err != nil {
-		logger.FromContext(ctx).Error("failed to update rejected section preview", "error", err, "guild_id", i.GuildID)
+		logger.FromContext(ctx).Error("failed to update rejected section preview", "error", err)
 	}
 }
 
 func (c *editCharacterCmd) respondExpired(ctx context.Context, s DiscordSession, i *discordgo.InteractionCreate) {
-	logger.FromContext(ctx).Warn("edit proposal no longer available", "guild_id", i.GuildID)
+	logger.FromContext(ctx).Warn("edit proposal no longer available")
 	if err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseUpdateMessage,
 		Data: &discordgo.InteractionResponseData{
@@ -559,7 +559,7 @@ func (c *editCharacterCmd) respondExpired(ctx context.Context, s DiscordSession,
 			Components:  nil,
 		},
 	}); err != nil {
-		logger.FromContext(ctx).Error("failed to report expired edit proposal", "error", err, "guild_id", i.GuildID)
+		logger.FromContext(ctx).Error("failed to report expired edit proposal", "error", err)
 	}
 }
 
@@ -567,7 +567,7 @@ func (c *editCharacterCmd) respondExpired(ctx context.Context, s DiscordSession,
 // is gone. Used when the proposal is known but its interaction token has
 // expired, so the preview messages can no longer be edited in place.
 func (c *editCharacterCmd) respondExpiredEphemeral(ctx context.Context, s DiscordSession, i *discordgo.InteractionCreate) {
-	logger.FromContext(ctx).Warn("edit proposal token expired", "guild_id", i.GuildID)
+	logger.FromContext(ctx).Warn("edit proposal token expired")
 	if err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
@@ -575,7 +575,7 @@ func (c *editCharacterCmd) respondExpiredEphemeral(ctx context.Context, s Discor
 			Flags:   discordgo.MessageFlagsEphemeral,
 		},
 	}); err != nil {
-		logger.FromContext(ctx).Error("failed to report expired edit proposal", "error", err, "guild_id", i.GuildID)
+		logger.FromContext(ctx).Error("failed to report expired edit proposal", "error", err)
 	}
 }
 

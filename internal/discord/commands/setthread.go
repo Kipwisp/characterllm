@@ -48,7 +48,7 @@ func (c *setThreadCmd) Execute(ctx context.Context, s DiscordSession, i *discord
 	}
 
 	if err := c.session.EnsureDefaultThread(ctx, i.GuildID, details.CharacterID); err != nil {
-		logger.FromContext(ctx).Warn("failed to ensure default thread", "error", err, "guild_id", i.GuildID)
+		logger.FromContext(ctx).Warn("failed to ensure default thread", "error", err)
 	}
 
 	value := i.ApplicationCommandData().GetOption("thread").StringValue()
@@ -66,7 +66,7 @@ func (c *setThreadCmd) Execute(ctx context.Context, s DiscordSession, i *discord
 
 	defer c.lock(i.GuildID, details.ActiveThreadID)()
 	if err := c.session.SetActiveThread(ctx, i.GuildID, details.CharacterID, thread.ThreadID); err != nil {
-		logger.FromContext(ctx).Error("failed to switch thread", "error", err, "guild_id", i.GuildID)
+		logger.FromContext(ctx).Error("failed to switch thread", "error", err)
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{

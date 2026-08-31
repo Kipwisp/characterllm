@@ -45,7 +45,7 @@ func (c *setCharacterCmd) Execute(ctx context.Context, s DiscordSession, i *disc
 	}
 
 	if err := c.session.SetActiveCharacter(ctx, i.GuildID, card.CharacterID); err != nil {
-		logger.FromContext(ctx).Error("failed to set active character", "error", err, "guild_id", i.GuildID)
+		logger.FromContext(ctx).Error("failed to set active character", "error", err)
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
@@ -57,7 +57,7 @@ func (c *setCharacterCmd) Execute(ctx context.Context, s DiscordSession, i *disc
 	}
 
 	if err := SyncGuildIdentity(ctx, c.session, c.imageClient, s, i.GuildID); err != nil {
-		logger.FromContext(ctx).Warn("failed to sync guild identity", "error", err, "guild_id", i.GuildID)
+		logger.FromContext(ctx).Warn("failed to sync guild identity", "error", err)
 	}
 
 	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
@@ -74,7 +74,7 @@ func (c *setCharacterCmd) Execute(ctx context.Context, s DiscordSession, i *disc
 // to its greeting, then to the boilerplate confirmation.
 func (c *setCharacterCmd) characterSwitchMessage(ctx context.Context, guildID string, card *session.CharacterCard) string {
 	if err := c.session.EnsureDefaultThread(ctx, guildID, card.CharacterID); err != nil {
-		logger.FromContext(ctx).Warn("failed to ensure default thread", "error", err, "guild_id", guildID)
+		logger.FromContext(ctx).Warn("failed to ensure default thread", "error", err)
 	}
 	threadID, _ := c.session.GetActiveThreadID(ctx, guildID, card.CharacterID)
 	if last, ok := c.session.GetLastCharacterMessage(ctx, guildID, card.CharacterID, threadID); ok {

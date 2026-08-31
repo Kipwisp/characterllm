@@ -98,7 +98,7 @@ func (c *createCharacterCmd) Execute(ctx context.Context, s DiscordSession, i *d
 	}
 
 	if err := ApplyCharacterAvatar(ctx, c.imageClient, s, i.GuildID, result.card.CharacterID, result.card.ImageURL); err != nil {
-		logger.FromContext(ctx).Warn("failed to apply character avatar", "error", err, "guild_id", i.GuildID)
+		logger.FromContext(ctx).Warn("failed to apply character avatar", "error", err)
 	}
 
 	return c.finalizeAvatar(ctx, s, i, result)
@@ -267,10 +267,10 @@ func (c *createCharacterCmd) fetchAndSetupCharacter(ctx context.Context, s Disco
 
 	// Finalize setup: save prompt and update nickname immediately
 	if err := c.session.SetActiveCharacter(ctx, i.GuildID, finalCard.CharacterID); err != nil {
-		logger.FromContext(ctx).Error("failed to save system prompt", "error", err, "guild_id", i.GuildID)
+		logger.FromContext(ctx).Error("failed to save system prompt", "error", err)
 	}
 	if err := s.GuildMemberNickname(i.GuildID, "@me", finalCard.DisplayName); err != nil {
-		logger.FromContext(ctx).Error("could not update bot nickname", "error", err, "guild_id", i.GuildID)
+		logger.FromContext(ctx).Error("could not update bot nickname", "error", err)
 	}
 
 	greeting, _ := research.ExtractSection(res.PersonaSpec, research.SectionGreeting)
@@ -356,9 +356,9 @@ func (c *createCharacterCmd) fetchAvatarCandidates(ctx context.Context, analysis
 func (c *createCharacterCmd) finalizeAvatar(ctx context.Context, s DiscordSession, i *discordgo.InteractionCreate, r *createResult) error {
 	if r.isModelPickValid() {
 		if err := c.applyAvatar(ctx, s, i.GuildID, r.card.CharacterID, r.kept[r.avatarChoice-1]); err != nil {
-			logger.FromContext(ctx).Warn("failed to apply model-picked avatar, falling back to manual selection", "error", err, "guild_id", i.GuildID, "character_id", r.card.CharacterID)
+			logger.FromContext(ctx).Warn("failed to apply model-picked avatar, falling back to manual selection", "error", err, "character_id", r.card.CharacterID)
 		} else {
-			logger.FromContext(ctx).Info("model-picked avatar applied", "guild_id", i.GuildID, "character_id", r.card.CharacterID, "index", r.avatarChoice)
+			logger.FromContext(ctx).Info("model-picked avatar applied", "character_id", r.card.CharacterID, "index", r.avatarChoice)
 			_, errEdit := s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
 				Content: utils.PtrString(characterSetupMessage(r.card, r.greeting)),
 			})
@@ -503,7 +503,7 @@ func (c *createCharacterCmd) handleImageSelection(ctx context.Context, s Discord
 
 	details, err := c.session.GetCharacterDetails(ctx, i.GuildID)
 	if err != nil {
-		logger.FromContext(ctx).Error("failed to get active character details", "error", err, "guild_id", i.GuildID)
+		logger.FromContext(ctx).Error("failed to get active character details", "error", err)
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
@@ -514,7 +514,7 @@ func (c *createCharacterCmd) handleImageSelection(ctx context.Context, s Discord
 	}
 
 	if err := c.applyAvatar(ctx, s, i.GuildID, details.CharacterID, selectedURL); err != nil {
-		logger.FromContext(ctx).Error("failed to apply selected avatar", "error", err, "guild_id", i.GuildID, "character_id", details.CharacterID)
+		logger.FromContext(ctx).Error("failed to apply selected avatar", "error", err, "character_id", details.CharacterID)
 		content := responses.SetCharacter.ImageError
 		if errors.Is(err, errGuildAvatarUpdate) {
 			content = responses.SetCharacter.AvatarError
@@ -536,7 +536,7 @@ func (c *createCharacterCmd) handleImageSelection(ctx context.Context, s Discord
 	// Retrieve full character card for the final success message
 	card, err := c.session.GetCharacterCard(ctx, i.GuildID, details.CharacterID)
 	if err != nil || card == nil {
-		logger.FromContext(ctx).Error("failed to get character card for success message", "error", err, "guild_id", i.GuildID)
+		logger.FromContext(ctx).Error("failed to get character card for success message", "error", err)
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseUpdateMessage,
 			Data: &discordgo.InteractionResponseData{

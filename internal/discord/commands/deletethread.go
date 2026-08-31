@@ -51,7 +51,7 @@ func (c *deleteThreadCmd) Execute(ctx context.Context, s DiscordSession, i *disc
 	}
 
 	if err := c.session.EnsureDefaultThread(ctx, i.GuildID, details.CharacterID); err != nil {
-		logger.FromContext(ctx).Warn("failed to ensure default thread", "error", err, "guild_id", i.GuildID)
+		logger.FromContext(ctx).Warn("failed to ensure default thread", "error", err)
 	}
 
 	value := i.ApplicationCommandData().GetOption("thread").StringValue()
@@ -142,7 +142,7 @@ func (c *deleteThreadCmd) handleDeleteConfirm(ctx context.Context, s DiscordSess
 	}
 
 	if err := c.session.EnsureDefaultThread(ctx, i.GuildID, details.CharacterID); err != nil {
-		logger.FromContext(ctx).Warn("failed to ensure default thread", "error", err, "guild_id", i.GuildID)
+		logger.FromContext(ctx).Warn("failed to ensure default thread", "error", err)
 	}
 	thread, err := c.session.GetThread(ctx, i.GuildID, details.CharacterID, threadID)
 	if err != nil || thread == nil {
@@ -161,7 +161,7 @@ func (c *deleteThreadCmd) handleDeleteConfirm(ctx context.Context, s DiscordSess
 	defer c.lock(i.GuildID, threadID)()
 	cleared, err := c.session.DeleteThread(ctx, i.GuildID, details.CharacterID, threadID)
 	if err != nil {
-		logger.FromContext(ctx).Error("failed to delete thread", "error", err, "guild_id", i.GuildID)
+		logger.FromContext(ctx).Error("failed to delete thread", "error", err)
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseUpdateMessage,
 			Data: &discordgo.InteractionResponseData{

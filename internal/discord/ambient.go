@@ -180,11 +180,11 @@ func (a *Ambient) tick(ctx context.Context, guildID string, channels []string) {
 
 	details, err := a.Session.GetCharacterDetails(ctx, guildID)
 	if err != nil {
-		logger.FromContext(ctx).Warn("ambient tick failed to get active character", "error", err, "guild_id", guildID)
+		logger.FromContext(ctx).Warn("ambient tick failed to get active character", "error", err)
 		return
 	}
 	if details == nil || details.CharacterID == "" {
-		logger.FromContext(ctx).Debug("ambient tick skipped: no active character", "guild_id", guildID)
+		logger.FromContext(ctx).Debug("ambient tick skipped: no active character")
 		return
 	}
 
@@ -193,7 +193,7 @@ func (a *Ambient) tick(ctx context.Context, guildID string, channels []string) {
 		return
 	}
 
-	logger.FromContext(ctx).Debug("ambient tick passed the check: sending message", "guild_id", guildID, "channel_id", t.ChannelID)
+	logger.FromContext(ctx).Debug("ambient tick passed the check: sending message", "channel_id", t.ChannelID)
 	a.Chat.runTurn(ctx, a.Discord, guildID, t, audit.KindAmbient, reqID)
 }
 
@@ -252,7 +252,7 @@ func (a *Ambient) channelNames(ctx context.Context, guildID string, channelIDs [
 			}
 		}
 	} else {
-		logger.FromContext(ctx).Warn("failed to list guild channels for the ambient topic cue", "guild_id", guildID, "error", err)
+		logger.FromContext(ctx).Warn("failed to list guild channels for the ambient topic cue", "error", err)
 	}
 
 	names := make([]string, len(channelIDs))
@@ -322,9 +322,11 @@ func buildTranscriptCue(ctx context.Context, s commands.DiscordSession, cfg *con
 
 // extractTranscript formats the channel chatter as "Name: message" lines and
 // collects the messages' image attachment URLs (up to LLM.MaxImages, only
-// when vision is enabled). Messages the bot would already have answered are
-// left out: the bot's own messages, mentions of the bot, and replies to a
-// bot message that falls inside the fetched window.
+// when vision is enabled). Non-image file attachments are referenced inline
+// as "[File: name]" so the transcript still shows that something was shared
+// even though its content is not available. Messages the bot would already
+// have answered are left out: the bot's own messages, mentions of the bot,
+// and replies to a bot message that falls inside the fetched window.
 func extractTranscript(msgs []*discordgo.Message, botID string, cfg *config.Config) (lines, imageURLs []string) {
 	// Discord returns the fetched messages newest-first; reverse so the
 	// transcript reads chronologically.
@@ -339,15 +341,22 @@ func extractTranscript(msgs []*discordgo.Message, botID string, cfg *config.Conf
 		if m.Author == nil || m.Author.ID == botID || messageAddressesBot(m, botID, byID) {
 			continue
 		}
-		if m.Content != "" {
-			lines = append(lines, m.Author.Username+": "+m.Content)
-		}
+		line := m.Content
 		if cfg.LLM.Vision {
 			for _, att := range m.Attachments {
 				if strings.HasPrefix(att.ContentType, "image/") && len(imageURLs) < cfg.LLM.MaxImages {
 					imageURLs = append(imageURLs, att.URL)
 				}
 			}
+		}
+		if markers := fileAttachmentMarkers(m.Attachments); markers != "" {
+			if line != "" {
+				line += " "
+			}
+			line += markers
+		}
+		if line != "" {
+			lines = append(lines, m.Author.Username+": "+line)
 		}
 	}
 	return lines, imageURLs

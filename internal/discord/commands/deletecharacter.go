@@ -99,7 +99,7 @@ func (c *deleteCharacterCmd) handleDeleteConfirm(ctx context.Context, s DiscordS
 
 	card, err := c.session.GetCharacterCard(ctx, i.GuildID, characterID)
 	if err != nil || card == nil {
-		logger.FromContext(ctx).Error("failed to retrieve character for deletion", "error", err, "characterID", characterID, "guild_id", i.GuildID)
+		logger.FromContext(ctx).Error("failed to retrieve character for deletion", "error", err, "characterID", characterID)
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
@@ -122,7 +122,7 @@ func (c *deleteCharacterCmd) handleDeleteConfirm(ctx context.Context, s DiscordS
 	}
 
 	if err := c.session.DeleteCharacterCard(ctx, i.GuildID, characterID); err != nil {
-		logger.FromContext(ctx).Error("failed to delete character card", "error", err, "characterID", characterID, "guild_id", i.GuildID)
+		logger.FromContext(ctx).Error("failed to delete character card", "error", err, "characterID", characterID)
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseUpdateMessage,
 			Data: &discordgo.InteractionResponseData{
@@ -143,10 +143,10 @@ func (c *deleteCharacterCmd) handleDeleteConfirm(ctx context.Context, s DiscordS
 
 	if wasActive {
 		if err := c.session.SetActiveCharacter(ctx, i.GuildID, ""); err != nil {
-			logger.FromContext(ctx).Warn("failed to clear active character after deletion", "error", err, "guild_id", i.GuildID)
+			logger.FromContext(ctx).Warn("failed to clear active character after deletion", "error", err)
 		}
 		if err := s.GuildMemberNickname(i.GuildID, "@me", ""); err != nil {
-			logger.FromContext(ctx).Warn("failed to reset bot nickname after deletion", "error", err, "guild_id", i.GuildID)
+			logger.FromContext(ctx).Warn("failed to reset bot nickname after deletion", "error", err)
 		}
 	}
 

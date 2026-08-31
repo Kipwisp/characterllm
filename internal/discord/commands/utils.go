@@ -239,7 +239,7 @@ func respondResolveError(ctx context.Context, s DiscordSession, i *discordgo.Int
 		})
 		return nil
 	default:
-		logger.FromContext(ctx).Error("failed to resolve character", "error", err, "guild_id", i.GuildID)
+		logger.FromContext(ctx).Error("failed to resolve character", "error", err)
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{

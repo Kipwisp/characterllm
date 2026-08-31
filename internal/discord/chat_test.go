@@ -367,6 +367,52 @@ func TestHandleMessageCreate_MaxImagesCapsForwardedAttachments(t *testing.T) {
 	})
 }
 
+func TestHandleMessageCreate_FileAttachmentMarkerInPrompt(t *testing.T) {
+	c, llmMock, sm, dbPath := setupChat(t)
+	defer os.Remove(dbPath)
+
+	ctx := context.Background()
+	guildID := "guild1"
+	charID := "char1"
+	sm.SaveCharacterCard(ctx, guildID, &session.CharacterCard{
+		CharacterID: charID,
+		DisplayName: "TestChar",
+		Description: "A test character",
+	})
+	sm.SetActiveCharacter(ctx, guildID, charID)
+
+	var captured []llm.Message
+	llmMock.GenerateResponseFn = func(ctx context.Context, messages []llm.Message, model string) (string, string, error) {
+		captured = messages
+		return "OK", "", nil
+	}
+	s := &mockDiscordSession{
+		GetUserMentionFn: func() string { return "<@123>" },
+		ChannelMessageSendReplyFn: func(channelID string, content string, response *discordgo.MessageReference) (*discordgo.Message, error) {
+			return nil, nil
+		},
+	}
+
+	m := &discordgo.MessageCreate{
+		Message: &discordgo.Message{
+			Content: "<@123> take a look",
+			Author:  &discordgo.User{Username: "user1", Bot: false},
+			Attachments: []*discordgo.MessageAttachment{
+				{URL: "https://cdn.discordapp.com/att/1.png", ContentType: "image/png"},
+				{URL: "https://cdn.discordapp.com/att/2.pdf", Filename: "report.pdf", ContentType: "application/pdf"},
+			},
+		},
+	}
+	m.GuildID = guildID
+
+	c.Handle(s, m)
+
+	last := captured[len(captured)-1]
+	if last.Content != "user1: take a look [File: report.pdf]" {
+		t.Errorf("expected the non-image file marker on the user prompt, got %q", last.Content)
+	}
+}
+
 func TestHandleMessageCreate_VisionDisabledIgnoresAttachments(t *testing.T) {
 	c, llmMock, sm, dbPath := setupChat(t)
 	defer os.Remove(dbPath)

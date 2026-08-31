@@ -42,7 +42,7 @@ func (c *addAmbientChannelCmd) Execute(ctx context.Context, s DiscordSession, i 
 
 	current, err := c.session.GetAmbientChannels(ctx, i.GuildID)
 	if err != nil {
-		logger.FromContext(ctx).Error("failed to read ambient channels", "error", err, "guild_id", i.GuildID)
+		logger.FromContext(ctx).Error("failed to read ambient channels", "error", err)
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{Content: responses.AmbientChannel.Error},
@@ -58,7 +58,7 @@ func (c *addAmbientChannelCmd) Execute(ctx context.Context, s DiscordSession, i 
 	}
 
 	if err := c.session.AddAmbientChannel(ctx, i.GuildID, channelID); err != nil {
-		logger.FromContext(ctx).Error("failed to add ambient channel", "error", err, "guild_id", i.GuildID)
+		logger.FromContext(ctx).Error("failed to add ambient channel", "error", err)
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{Content: responses.AmbientChannel.Error},

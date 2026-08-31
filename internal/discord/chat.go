@@ -46,7 +46,7 @@ func (c *Chat) Handle(s commands.DiscordSession, m *discordgo.MessageCreate) {
 
 	// Initialize request tracking
 	reqID := uuid.New().String()
-	ctx := logger.ToContext(context.Background(), logger.WithRequestID(reqID, "guild_id", m.GuildID))
+	ctx := logger.ToContext(context.Background(), logger.WithRequestID(reqID))
 
 	prompt, ok := c.getPrompt(ctx, s, m)
 	kind := audit.KindChat
@@ -92,7 +92,7 @@ func (c *Chat) ambientReplyPrompt(ctx context.Context, s commands.DiscordSession
 		return "", nil, false
 	}
 	if c.roll() >= c.Config.Ambient.ReplyProbability {
-		logger.FromContext(ctx).Debug("ambient reply skipped by probability gate", "guild_id", m.GuildID)
+		logger.FromContext(ctx).Debug("ambient reply skipped by probability gate")
 		return "", nil, false
 	}
 	cue, imageDataURIs, err := buildTranscriptCue(ctx, s, c.Config, c.ImageClient, m.ChannelID)
@@ -101,11 +101,11 @@ func (c *Chat) ambientReplyPrompt(ctx context.Context, s commands.DiscordSession
 		return "", nil, false
 	}
 	if cue == "" {
-		logger.FromContext(ctx).Debug("ambient reply skipped: empty transcript", "guild_id", m.GuildID)
+		logger.FromContext(ctx).Debug("ambient reply skipped: empty transcript")
 		return "", nil, false
 	}
 
-	logger.FromContext(ctx).Debug("sending ambient reply", "guild_id", m.GuildID)
+	logger.FromContext(ctx).Debug("sending ambient reply")
 	return cue, imageDataURIs, true
 }
 
@@ -253,6 +253,19 @@ func (c *Chat) collectImageAttachments(ctx context.Context, m *discordgo.Message
 }
 
 // getPrompt checks if the bot is mentioned in a message or if the message is a reply to the bot, and formats the prompt with the user's display name.
+// fileAttachmentMarkers renders non-image file attachments as space-joined
+// "[File: name]" markers, so a prompt can reference a shared file by name
+// even though its content is not available.
+func fileAttachmentMarkers(atts []*discordgo.MessageAttachment) string {
+	var markers []string
+	for _, att := range atts {
+		if !strings.HasPrefix(att.ContentType, "image/") && att.Filename != "" {
+			markers = append(markers, "[File: "+att.Filename+"]")
+		}
+	}
+	return strings.Join(markers, " ")
+}
+
 func (c *Chat) getPrompt(_ context.Context, s commands.DiscordSession, m *discordgo.MessageCreate) (string, bool) {
 	isMentioned := strings.Contains(m.Content, s.GetUserMention())
 	isReplyToBot := m.ReferencedMessage != nil && m.ReferencedMessage.Author.ID == s.GetUserID()
@@ -263,6 +276,12 @@ func (c *Chat) getPrompt(_ context.Context, s commands.DiscordSession, m *discor
 
 	prompt := strings.ReplaceAll(m.Content, s.GetUserMention(), "")
 	prompt = strings.TrimSpace(prompt)
+	if markers := fileAttachmentMarkers(m.Attachments); markers != "" {
+		if prompt != "" {
+			prompt += " "
+		}
+		prompt += markers
+	}
 
 	displayName := m.Author.Username
 	if m.Member != nil && m.Member.Nick != "" {

@@ -51,7 +51,7 @@ func (c *newThreadCmd) Execute(ctx context.Context, s DiscordSession, i *discord
 	}
 
 	if err := c.session.EnsureDefaultThread(ctx, i.GuildID, details.CharacterID); err != nil {
-		logger.FromContext(ctx).Warn("failed to ensure default thread", "error", err, "guild_id", i.GuildID)
+		logger.FromContext(ctx).Warn("failed to ensure default thread", "error", err)
 	}
 
 	defer c.lock(i.GuildID, details.ActiveThreadID)()
@@ -65,7 +65,7 @@ func (c *newThreadCmd) Execute(ctx context.Context, s DiscordSession, i *discord
 	if name == "" {
 		name, err = c.defaultThreadName(ctx, i.GuildID, details.CharacterID)
 		if err != nil {
-			logger.FromContext(ctx).Error("failed to derive default thread name", "error", err, "guild_id", i.GuildID)
+			logger.FromContext(ctx).Error("failed to derive default thread name", "error", err)
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
@@ -88,7 +88,7 @@ func (c *newThreadCmd) Execute(ctx context.Context, s DiscordSession, i *discord
 			})
 			return nil
 		}
-		logger.FromContext(ctx).Error("failed to create thread", "error", err, "guild_id", i.GuildID)
+		logger.FromContext(ctx).Error("failed to create thread", "error", err)
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{

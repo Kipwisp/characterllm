@@ -47,12 +47,12 @@ func NewCompactor(llm llm.LLMClient, session *session.Manager, cfg *config.Confi
 // flight for the conversation.
 func (c *Compactor) Compact(ctx context.Context, guildID, threadID, charID, reqID string) {
 	if !c.tryStartCompaction(guildID, threadID) {
-		logger.FromContext(ctx).Info("compaction already in progress, skipping", "guild_id", guildID)
+		logger.FromContext(ctx).Info("compaction already in progress, skipping")
 		return
 	}
 	defer c.endCompaction(guildID, threadID)
 
-	logger.FromContext(ctx).Info("stored history exceeds prompt budget, initiating compaction", "guild_id", guildID)
+	logger.FromContext(ctx).Info("stored history exceeds prompt budget, initiating compaction")
 
 	total, err := c.session.GetHistoryCount(ctx, guildID, threadID)
 	if err != nil {
@@ -126,7 +126,7 @@ func (c *Compactor) Compact(ctx context.Context, guildID, threadID, charID, reqI
 		logger.FromContext(ctx).Error("error pruning history", "error", err)
 		return
 	}
-	logger.FromContext(ctx).Info("history compacted successfully", "guild_id", guildID, "messages_pruned", prunedCount)
+	logger.FromContext(ctx).Info("history compacted successfully", "messages_pruned", prunedCount)
 
 	// Log the compaction reasoning
 	c.audit.Log(ctx, guildID, threadID, charID, reqID, audit.Turn{

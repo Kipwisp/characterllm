@@ -38,13 +38,13 @@ func (c *clearThreadCmd) Execute(ctx context.Context, s DiscordSession, i *disco
 	}
 
 	if err := c.session.EnsureDefaultThread(ctx, i.GuildID, details.CharacterID); err != nil {
-		logger.FromContext(ctx).Warn("failed to ensure default thread", "error", err, "guild_id", i.GuildID)
+		logger.FromContext(ctx).Warn("failed to ensure default thread", "error", err)
 	}
 	threadID := details.ActiveThreadID
 
 	defer c.lock(i.GuildID, threadID)()
 	if err := c.session.ClearHistory(ctx, i.GuildID, threadID); err != nil {
-		logger.FromContext(ctx).Error("failed to clear thread history", "error", err, "guild_id", i.GuildID)
+		logger.FromContext(ctx).Error("failed to clear thread history", "error", err)
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{

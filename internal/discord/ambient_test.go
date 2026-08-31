@@ -768,3 +768,56 @@ func TestSplitChannelLine(t *testing.T) {
 		}
 	})
 }
+
+func TestExtractTranscript_FileAttachments(t *testing.T) {
+	cfg := &config.Config{LLM: config.LLMConfig{Vision: true, MaxImages: 2}}
+	// Discord returns messages newest-first; extractTranscript reverses the
+	// slice in place, so each call gets a fresh one.
+	newestFirst := func() []*discordgo.Message {
+		return []*discordgo.Message{
+		{ID: "4", Author: &discordgo.User{ID: "a4", Username: "Dan"}, Content: "plain text"},
+		{ID: "3", Author: &discordgo.User{ID: "a3", Username: "Cara"}, Content: "a photo",
+			Attachments: []*discordgo.MessageAttachment{{URL: "https://img/1.png", ContentType: "image/png"}}},
+		{ID: "2", Author: &discordgo.User{ID: "a2", Username: "Bob"},
+			Attachments: []*discordgo.MessageAttachment{{Filename: "archive.zip", ContentType: "application/zip"}}},
+		{ID: "1", Author: &discordgo.User{ID: "a1", Username: "Alice"}, Content: "check this out",
+			Attachments: []*discordgo.MessageAttachment{{Filename: "report.pdf", ContentType: "application/pdf"}}},
+		}
+	}
+
+	lines, imageURLs := extractTranscript(newestFirst(), "bot1", cfg)
+	if len(lines) != 4 {
+		t.Fatalf("expected 4 lines, got %d: %v", len(lines), lines)
+	}
+	if lines[0] != "Alice: check this out [File: report.pdf]" {
+		t.Errorf("unexpected first line %q", lines[0])
+	}
+	if lines[1] != "Bob: [File: archive.zip]" {
+		t.Errorf("expected the file-only message to carry a marker line, got %q", lines[1])
+	}
+	if lines[2] != "Cara: a photo" {
+		t.Errorf("expected the image message to keep its text without a file marker, got %q", lines[2])
+	}
+	if lines[3] != "Dan: plain text" {
+		t.Errorf("unexpected fourth line %q", lines[3])
+	}
+	if len(imageURLs) != 1 || imageURLs[0] != "https://img/1.png" {
+		t.Errorf("expected the single image URL collected, got %v", imageURLs)
+	}
+
+	// With vision disabled the image is dropped and the file markers remain.
+	lines, imageURLs = extractTranscript(newestFirst(), "bot1", &config.Config{LLM: config.LLMConfig{MaxImages: 2}})
+	if len(lines) != 4 || lines[2] != "Cara: a photo" {
+		t.Errorf("vision disabled: expected the text lines unchanged, got %v", lines)
+	}
+	if len(imageURLs) != 0 {
+		t.Errorf("vision disabled: expected no image URLs, got %v", imageURLs)
+	}
+
+	fileOnly := []*discordgo.Message{{ID: "9", Author: &discordgo.User{ID: "a2", Username: "Bob"},
+		Attachments: []*discordgo.MessageAttachment{{Filename: "x.tar.gz", ContentType: "application/gzip"}}}}
+	lines, _ = extractTranscript(fileOnly, "bot1", cfg)
+	if len(lines) != 1 || lines[0] != "Bob: [File: x.tar.gz]" {
+		t.Errorf("expected the file-only message to yield a marker line, got %v", lines)
+	}
+}

@@ -76,7 +76,7 @@ func (c *setAvatarCmd) Execute(ctx context.Context, s DiscordSession, i *discord
 
 	path, err := c.imageClient.SaveImage(ctx, i.GuildID, details.CharacterID, sourceURL)
 	if err != nil {
-		logger.FromContext(ctx).Error("failed to download avatar image", "error", err, "guild_id", i.GuildID)
+		logger.FromContext(ctx).Error("failed to download avatar image", "error", err)
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
@@ -98,7 +98,7 @@ func (c *setAvatarCmd) Execute(ctx context.Context, s DiscordSession, i *discord
 
 	// clear image_url since we are using a user uploaded image now
 	if err := c.session.SetCharacterImage(ctx, i.GuildID, details.CharacterID, ""); err != nil {
-		logger.FromContext(ctx).Error("failed to clear character image url", "error", err, "guild_id", i.GuildID, "character_id", details.CharacterID)
+		logger.FromContext(ctx).Error("failed to clear character image url", "error", err, "character_id", details.CharacterID)
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
@@ -111,7 +111,7 @@ func (c *setAvatarCmd) Execute(ctx context.Context, s DiscordSession, i *discord
 	// the image is already in the local cache from SaveImage, so
 	// ApplyCharacterAvatar serves it from there and uploads it.
 	if err := ApplyCharacterAvatar(ctx, c.imageClient, s, i.GuildID, details.CharacterID, ""); err != nil {
-		logger.FromContext(ctx).Error("failed to apply avatar", "error", err, "guild_id", i.GuildID)
+		logger.FromContext(ctx).Error("failed to apply avatar", "error", err)
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
