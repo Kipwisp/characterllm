@@ -10,15 +10,15 @@ import (
 
 // Config holds the application configuration loaded from environment variables.
 type Config struct {
-	Discord DiscordConfig
-	LLM     LLMConfig
-	Prompts PromptConfig
-	Search  SearchConfig
+	Discord  DiscordConfig
+	LLM      LLMConfig
+	Prompts  PromptConfig
+	Search   SearchConfig
 	Research ResearchConfig
-	Images  ImageConfig
-	Invite  InviteConfig
-	Ambient AmbientConfig
-	General GeneralConfig
+	Images   ImageConfig
+	Invite   InviteConfig
+	Ambient  AmbientConfig
+	General  GeneralConfig
 }
 
 type DiscordConfig struct {
@@ -27,11 +27,11 @@ type DiscordConfig struct {
 }
 
 type LLMConfig struct {
-	URL                 string
+	URL string
 	// APIKey, when set, is sent as a Bearer Authorization header on every
 	// LLM request.
-	APIKey string
-	Model  string
+	APIKey              string
+	Model               string
 	MaxRetries          int
 	MaxContext          int
 	CompactionThreshold float64

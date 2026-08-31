@@ -775,13 +775,13 @@ func TestExtractTranscript_FileAttachments(t *testing.T) {
 	// slice in place, so each call gets a fresh one.
 	newestFirst := func() []*discordgo.Message {
 		return []*discordgo.Message{
-		{ID: "4", Author: &discordgo.User{ID: "a4", Username: "Dan"}, Content: "plain text"},
-		{ID: "3", Author: &discordgo.User{ID: "a3", Username: "Cara"}, Content: "a photo",
-			Attachments: []*discordgo.MessageAttachment{{URL: "https://img/1.png", ContentType: "image/png"}}},
-		{ID: "2", Author: &discordgo.User{ID: "a2", Username: "Bob"},
-			Attachments: []*discordgo.MessageAttachment{{Filename: "archive.zip", ContentType: "application/zip"}}},
-		{ID: "1", Author: &discordgo.User{ID: "a1", Username: "Alice"}, Content: "check this out",
-			Attachments: []*discordgo.MessageAttachment{{Filename: "report.pdf", ContentType: "application/pdf"}}},
+			{ID: "4", Author: &discordgo.User{ID: "a4", Username: "Dan"}, Content: "plain text"},
+			{ID: "3", Author: &discordgo.User{ID: "a3", Username: "Cara"}, Content: "a photo",
+				Attachments: []*discordgo.MessageAttachment{{URL: "https://img/1.png", ContentType: "image/png"}}},
+			{ID: "2", Author: &discordgo.User{ID: "a2", Username: "Bob"},
+				Attachments: []*discordgo.MessageAttachment{{Filename: "archive.zip", ContentType: "application/zip"}}},
+			{ID: "1", Author: &discordgo.User{ID: "a1", Username: "Alice"}, Content: "check this out",
+				Attachments: []*discordgo.MessageAttachment{{Filename: "report.pdf", ContentType: "application/pdf"}}},
 		}
 	}
 
