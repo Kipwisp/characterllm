@@ -821,3 +821,27 @@ func TestExtractTranscript_FileAttachments(t *testing.T) {
 		t.Errorf("expected the file-only message to yield a marker line, got %v", lines)
 	}
 }
+
+func TestExtractTranscript_Nickname(t *testing.T) {
+	cfg := &config.Config{}
+	msgs := []*discordgo.Message{
+		{ID: "2", Author: &discordgo.User{ID: "a2", Username: "Bob"}, Content: "hi",
+			Member: &discordgo.Member{Nick: "Bobby"}},
+		{ID: "1", Author: &discordgo.User{ID: "a1", Username: "Alice"}, Content: "hello"},
+		{ID: "3", Author: &discordgo.User{ID: "a3", Username: "Cara"}, Content: "yo",
+			Member: &discordgo.Member{Nick: ""}},
+	}
+	lines, _ := extractTranscript(msgs, "bot1", cfg)
+	if len(lines) != 3 {
+		t.Fatalf("expected 3 lines, got %d: %v", len(lines), lines)
+	}
+	if lines[0] != "Cara: yo" {
+		t.Errorf("expected the username when the nickname is empty, got %q", lines[0])
+	}
+	if lines[1] != "Alice: hello" {
+		t.Errorf("expected username when no member info, got %q", lines[1])
+	}
+	if lines[2] != "Bobby: hi" {
+		t.Errorf("expected the guild nickname, got %q", lines[2])
+	}
+}

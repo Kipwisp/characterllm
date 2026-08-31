@@ -356,10 +356,19 @@ func extractTranscript(msgs []*discordgo.Message, botID string, cfg *config.Conf
 			line += markers
 		}
 		if line != "" {
-			lines = append(lines, m.Author.Username+": "+line)
+			lines = append(lines, transcriptName(m)+": "+line)
 		}
 	}
 	return lines, imageURLs
+}
+
+// transcriptName returns the message author's display name for the
+// transcript: their guild nickname when set, otherwise their username.
+func transcriptName(m *discordgo.Message) string {
+	if m.Member != nil && m.Member.Nick != "" {
+		return m.Member.Nick
+	}
+	return m.Author.Username
 }
 
 // messageAddressesBot reports whether m mentions the bot or replies to a bot
