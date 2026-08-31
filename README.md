@@ -183,7 +183,7 @@ go build ./...
 go test ./...
 ```
 
-## LLM Observability
+## LLM Transcripts
 
 - **Audit files**: `logs/{guild_id}_{character_id}_{thread_id}.log`: A transcript of every LLM interaction with the model's reasoning included, which can be helpful when tweaking prompts. Enable with `CONVERSATION_LOG=true`.
 
