@@ -5,6 +5,7 @@ import (
 
 	"characterllm/internal/llm"
 	"characterllm/internal/responses"
+	"characterllm/internal/version"
 
 	"github.com/bwmarrin/discordgo"
 )
@@ -40,6 +41,11 @@ func (c *statusCmd) Execute(ctx context.Context, s DiscordSession, i *discordgo.
 			{Name: responses.Status.Latency, Value: latency.String(), Inline: true},
 		}
 	}
+
+	embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
+		Name:  responses.Status.Version,
+		Value: version.String(),
+	})
 
 	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,

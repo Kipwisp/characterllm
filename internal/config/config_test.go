@@ -222,7 +222,7 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if cfg.Research.MaxSourceChars != 0 {
 		t.Errorf("Expected default RESEARCH_MAX_SOURCE_CHARS 0, got %d", cfg.Research.MaxSourceChars)
 	}
-	if cfg.Images.CacheDir != "images/cache" {
+	if cfg.Images.CacheDir != "data/images/cache" {
 		t.Errorf("Expected default IMAGE_CACHE_DIR, got %s", cfg.Images.CacheDir)
 	}
 	if cfg.Images.MaxImageSearchResults != 10 {

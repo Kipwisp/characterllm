@@ -34,7 +34,7 @@ Only **SearXNG** is supported (`SEARCH_PROVIDER=searxng`) currently, configured 
 ### 1. Clone and configure
 
 ```sh
-git clone https://github.com/Kipwisp/characterllm.git
+git clone https://github.com/lutravox/characterllm.git
 cd characterllm
 ```
 
@@ -63,12 +63,33 @@ go build -o bin/bot ./cmd/bot
 
 ### Running with Docker
 
+Pull the pre-built image. Create a `.env` with at least the variables from the [minimum working configuration](#1-clone-and-configure), then run:
+
+```yaml
+services:
+  characterllm:
+    image: ghcr.io/lutravox/characterllm:latest
+    env_file: .env
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+```
+
 ```sh
-git clone https://github.com/Kipwisp/characterllm.git
+docker compose up -d
+```
+
+The `data/` volume holds the bot's session database and avatar cache; `logs/` holds audit logs when `CONVERSATION_LOG=true`.
+
+To build the image from source instead, use the included `Dockerfile`:
+
+```sh
+git clone https://github.com/lutravox/characterllm.git
 cd characterllm
 
 # create the .env, then:
-docker compose up -d --build
+docker compose -f docker-compose.build.yml up -d --build
 ```
 
 ## Config Options
@@ -115,7 +136,7 @@ docker compose up -d --build
 | --- | --- | --- |
 | `MAX_IMAGE_SEARCH_RESULTS` | `10` | Number of image avatar candidates searched per character. |
 | `IMAGE_MAX_EDGE` | `512` | Long-edge cap (px) for LLM processed images (avatars, vision attachments). |
-| `IMAGE_CACHE_DIR` | `images/cache` | Directory for the character avatar cache. |
+| `IMAGE_CACHE_DIR` | `data/images/cache` | Directory for the character avatar cache. |
 
 ### Prompts
 

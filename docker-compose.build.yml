@@ -1,6 +1,6 @@
 services:
   characterllm:
-    image: ghcr.io/lutravox/characterllm:latest
+    build: .
     env_file: .env
     restart: unless-stopped
     volumes:

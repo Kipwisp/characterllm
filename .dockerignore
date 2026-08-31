@@ -3,6 +3,5 @@ logs/
 data/
 *.db
 .env
-images/
 Dockerfile
 docker-compose.yml

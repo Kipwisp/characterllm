@@ -37,15 +37,19 @@ func (c *setAvatarCmd) Definition() *discordgo.ApplicationCommand {
 
 // Execute downloads the attached image into the local cache (the source of
 // truth for the character's avatar) and sets it as the bot's guild avatar.
+// The download and upload can exceed Discord's three second interaction
+// deadline, so the response is deferred immediately and edited once the
+// work is done.
 func (c *setAvatarCmd) Execute(ctx context.Context, s DiscordSession, i *discordgo.InteractionCreate) error {
+	if err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
+	}); err != nil {
+		return err
+	}
+
 	details, err := c.session.GetCharacterDetails(ctx, i.GuildID)
 	if err != nil || details == nil || details.CharacterID == "" {
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: responses.SetAvatar.NoCharacter,
-			},
-		})
+		respondContent(ctx, s, i, responses.SetAvatar.NoCharacter)
 		return fmt.Errorf("no active character in guild %s", i.GuildID)
 	}
 
@@ -54,57 +58,32 @@ func (c *setAvatarCmd) Execute(ctx context.Context, s DiscordSession, i *discord
 		sourceURL = firstImageAttachment(i)
 	}
 	if sourceURL == "" {
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: responses.SetAvatar.MissingSource,
-			},
-		})
+		respondContent(ctx, s, i, responses.SetAvatar.MissingSource)
 		return fmt.Errorf("no image source provided")
 	}
 
 	if c.imageClient == nil {
 		logger.FromContext(ctx).Error("no image client available")
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: responses.SetAvatar.DownloadError,
-			},
-		})
+		respondContent(ctx, s, i, responses.SetAvatar.DownloadError)
 		return fmt.Errorf("no image client available")
 	}
 
 	path, err := c.imageClient.SaveImage(ctx, i.GuildID, details.CharacterID, sourceURL)
 	if err != nil {
 		logger.FromContext(ctx).Error("failed to download avatar image", "error", err)
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: responses.SetAvatar.DownloadError,
-			},
-		})
+		respondContent(ctx, s, i, responses.SetAvatar.DownloadError)
 		return err
 	}
 
 	if fi, err := os.Stat(path); err == nil && fi.Size() > maxAvatarBytes {
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: responses.SetAvatar.TooLarge,
-			},
-		})
+		respondContent(ctx, s, i, responses.SetAvatar.TooLarge)
 		return fmt.Errorf("avatar image exceeds %d bytes", maxAvatarBytes)
 	}
 
 	// clear image_url since we are using a user uploaded image now
 	if err := c.session.SetCharacterImage(ctx, i.GuildID, details.CharacterID, ""); err != nil {
 		logger.FromContext(ctx).Error("failed to clear character image url", "error", err, "character_id", details.CharacterID)
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: responses.SetAvatar.DownloadError,
-			},
-		})
+		respondContent(ctx, s, i, responses.SetAvatar.DownloadError)
 		return err
 	}
 
@@ -112,22 +91,19 @@ func (c *setAvatarCmd) Execute(ctx context.Context, s DiscordSession, i *discord
 	// ApplyCharacterAvatar serves it from there and uploads it.
 	if err := ApplyCharacterAvatar(ctx, c.imageClient, s, i.GuildID, details.CharacterID, ""); err != nil {
 		logger.FromContext(ctx).Error("failed to apply avatar", "error", err)
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: responses.SetAvatar.AvatarError,
-			},
-		})
+		respondContent(ctx, s, i, responses.SetAvatar.AvatarError)
 		return err
 	}
 
-	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Content: responses.SetAvatar.Success,
-		},
-	})
+	respondContent(ctx, s, i, responses.SetAvatar.Success)
 	return nil
+}
+
+// respondContent sets the final text of a deferred interaction response.
+func respondContent(ctx context.Context, s DiscordSession, i *discordgo.InteractionCreate, content string) {
+	if _, err := s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{Content: &content}); err != nil {
+		logger.FromContext(ctx).Error("failed to edit interaction response", "error", err)
+	}
 }
 
 // attachmentOptionURL resolves the command's attachment option — whose value

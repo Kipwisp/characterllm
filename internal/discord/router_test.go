@@ -10,6 +10,7 @@ import (
 	"characterllm/internal/responses"
 	"characterllm/internal/session"
 	"characterllm/internal/testkit"
+	"characterllm/internal/version"
 
 	"github.com/bwmarrin/discordgo"
 )
@@ -58,8 +59,9 @@ func TestInteractionCreate_DispatchesSlashCommand(t *testing.T) {
 	if capturedEmbed == nil || capturedEmbed.Title != responses.Status.Title {
 		t.Errorf("unexpected response: %+v", capturedEmbed)
 	}
-	if len(capturedEmbed.Fields) != 2 || capturedEmbed.Fields[0].Value != responses.Status.Online ||
-		capturedEmbed.Fields[1].Value != (42*time.Millisecond).String() {
+	if len(capturedEmbed.Fields) != 3 || capturedEmbed.Fields[0].Value != responses.Status.Online ||
+		capturedEmbed.Fields[1].Value != (42*time.Millisecond).String() ||
+		capturedEmbed.Fields[2].Name != responses.Status.Version || capturedEmbed.Fields[2].Value != version.String() {
 		t.Errorf("unexpected embed fields: %+v", capturedEmbed.Fields)
 	}
 }

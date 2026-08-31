@@ -9,13 +9,15 @@ var (
 		Offline string
 		Latency string
 		Error   string
+		Version string
 	}{
-		Title:   "LLM Server Status",
-		State:   "State",
+		Title:   "Status",
+		State:   "LLM",
 		Online:  "✅ Online",
 		Offline: "❌ Offline",
 		Latency: "Latency",
 		Error:   "Error",
+		Version: "Bot Version",
 	}
 
 	CreateCharacter = struct {

@@ -39,22 +39,33 @@ func TestSetAvatarCmd(t *testing.T) {
 		return i
 	}
 
+	capture := func(s *mockDiscordSession) *string {
+		content := new(string)
+		s.InteractionRespondFn = func(interaction *discordgo.Interaction, response *discordgo.InteractionResponse) error {
+			if response.Type != discordgo.InteractionResponseDeferredChannelMessageWithSource {
+				t.Errorf("expected the first response to be a defer, got type %d", response.Type)
+			}
+			return nil
+		}
+		s.InteractionResponseEditFn = func(interaction *discordgo.Interaction, edit *discordgo.WebhookEdit) (*discordgo.Message, error) {
+			*content = *edit.Content
+			return nil, nil
+		}
+		return content
+	}
+
 	t.Run("no active character", func(t *testing.T) {
 		cmdCtx, s, dbPath := setupCommandTest(t)
 		defer os.Remove(dbPath)
 
-		var content string
-		s.InteractionRespondFn = func(interaction *discordgo.Interaction, response *discordgo.InteractionResponse) error {
-			content = response.Data.Content
-			return nil
-		}
+		content := capture(s)
 
 		cmd := &setAvatarCmd{session: cmdCtx.Session, imageClient: cmdCtx.ImageClient}
 		if err := cmd.Execute(context.Background(), s, newInteraction(nil, nil)); err == nil {
 			t.Error("expected error without active character")
 		}
-		if content != responses.SetAvatar.NoCharacter {
-			t.Errorf("unexpected response: %s", content)
+		if *content != responses.SetAvatar.NoCharacter {
+			t.Errorf("unexpected response: %s", *content)
 		}
 	})
 
@@ -65,18 +76,14 @@ func TestSetAvatarCmd(t *testing.T) {
 		cmdCtx.Session.SaveCharacterCard(context.Background(), guildID, &session.CharacterCard{CharacterID: charID, DisplayName: "C"})
 		cmdCtx.Session.SetActiveCharacter(context.Background(), guildID, charID)
 
-		var content string
-		s.InteractionRespondFn = func(interaction *discordgo.Interaction, response *discordgo.InteractionResponse) error {
-			content = response.Data.Content
-			return nil
-		}
+		content := capture(s)
 
 		cmd := &setAvatarCmd{session: cmdCtx.Session, imageClient: cmdCtx.ImageClient}
 		if err := cmd.Execute(context.Background(), s, newInteraction(nil, nil)); err == nil {
 			t.Error("expected error without source")
 		}
-		if content != responses.SetAvatar.MissingSource {
-			t.Errorf("unexpected response: %s", content)
+		if *content != responses.SetAvatar.MissingSource {
+			t.Errorf("unexpected response: %s", *content)
 		}
 	})
 
@@ -111,11 +118,7 @@ func TestSetAvatarCmd(t *testing.T) {
 		}
 		cmdCtx.ImageClient = mockImg
 
-		var content string
-		s.InteractionRespondFn = func(interaction *discordgo.Interaction, response *discordgo.InteractionResponse) error {
-			content = response.Data.Content
-			return nil
-		}
+		content := capture(s)
 		s.UpdateGuildAvatarFn = func(g string, dataURI string) error {
 			avatarDataURI = dataURI
 			return nil
@@ -139,8 +142,8 @@ func TestSetAvatarCmd(t *testing.T) {
 		if avatarDataURI != "data:image/png;base64,abc" {
 			t.Errorf("expected avatar update, got %q", avatarDataURI)
 		}
-		if content != responses.SetAvatar.Success {
-			t.Errorf("unexpected response: %s", content)
+		if *content != responses.SetAvatar.Success {
+			t.Errorf("unexpected response: %s", *content)
 		}
 	})
 
@@ -168,9 +171,7 @@ func TestSetAvatarCmd(t *testing.T) {
 		}
 		cmdCtx.ImageClient = mockImg
 
-		s.InteractionRespondFn = func(interaction *discordgo.Interaction, response *discordgo.InteractionResponse) error {
-			return nil
-		}
+		capture(s)
 		s.UpdateGuildAvatarFn = func(g string, dataURI string) error { return nil }
 
 		opt := &discordgo.MessageAttachment{
@@ -206,11 +207,7 @@ func TestSetAvatarCmd(t *testing.T) {
 		}
 		cmdCtx.ImageClient = mockImg
 
-		var content string
-		s.InteractionRespondFn = func(interaction *discordgo.Interaction, response *discordgo.InteractionResponse) error {
-			content = response.Data.Content
-			return nil
-		}
+		content := capture(s)
 
 		attachments := []*discordgo.MessageAttachment{
 			{URL: "https://cdn.discordapp.com/att/big.png", ContentType: "image/png"},
@@ -219,8 +216,8 @@ func TestSetAvatarCmd(t *testing.T) {
 		if err := cmd.Execute(context.Background(), s, newInteraction(attachments, nil)); err == nil {
 			t.Error("expected error for oversized image")
 		}
-		if content != responses.SetAvatar.TooLarge {
-			t.Errorf("unexpected response: %s", content)
+		if *content != responses.SetAvatar.TooLarge {
+			t.Errorf("unexpected response: %s", *content)
 		}
 
 		card, _ := cmdCtx.Session.GetCharacterCard(context.Background(), guildID, charID)

@@ -155,7 +155,7 @@ func LoadConfig() *Config {
 			MaxSourceChars: getEnvPositiveInt("RESEARCH_MAX_SOURCE_CHARS", 0),
 		},
 		Images: ImageConfig{
-			CacheDir:              getEnv("IMAGE_CACHE_DIR", "images/cache"),
+			CacheDir:              getEnv("IMAGE_CACHE_DIR", "data/images/cache"),
 			MaxImageEdge:          getEnvPositiveInt("IMAGE_MAX_EDGE", 512),
 			MaxImageSearchResults: getEnvPositiveInt("MAX_IMAGE_SEARCH_RESULTS", 10),
 		},
