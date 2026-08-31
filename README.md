@@ -63,7 +63,7 @@ go build -o bin/bot ./cmd/bot
 
 ### Running with Docker
 
-Pull the pre-built image. Create a `.env` with at least the variables from the [minimum working configuration](#1-clone-and-configure), then run:
+Create a `.env` with at least the variables from the [minimum working configuration](#1-clone-and-configure), then run:
 
 ```yaml
 services:
