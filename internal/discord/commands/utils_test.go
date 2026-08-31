@@ -3,12 +3,15 @@ package commands
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
 
 	"characterllm/internal/research"
 	"characterllm/internal/session"
+
+	"github.com/bwmarrin/discordgo"
 )
 
 type identityCalls struct {
@@ -392,6 +395,38 @@ func TestCardChoiceName(t *testing.T) {
 				t.Errorf("choice name exceeds %d runes: %d", choiceNameLimit, len([]rune(got)))
 			}
 		})
+	}
+}
+
+func TestCapAutocompleteChoices(t *testing.T) {
+	mk := func(n int) []*discordgo.ApplicationCommandOptionChoice {
+		choices := make([]*discordgo.ApplicationCommandOptionChoice, n)
+		for i := range choices {
+			choices[i] = &discordgo.ApplicationCommandOptionChoice{Name: fmt.Sprintf("c%d", i), Value: fmt.Sprintf("v%d", i)}
+		}
+		return choices
+	}
+	if got := capAutocompleteChoices(mk(10)); len(got) != 10 {
+		t.Fatalf("under limit: got %d choices, want 10", len(got))
+	}
+	if got := capAutocompleteChoices(mk(31)); len(got) != maxAutocompleteChoices {
+		t.Fatalf("over limit: got %d choices, want %d", len(got), maxAutocompleteChoices)
+	}
+}
+
+func TestAutocompleteCharacters_CapsAtLimitWithoutCurrent(t *testing.T) {
+	cmdCtx, _, dbPath := setupCommandTest(t)
+	defer os.Remove(dbPath)
+
+	ctx := context.Background()
+	for i := 0; i < 31; i++ {
+		id := fmt.Sprintf("c%02d", i)
+		cmdCtx.Session.SaveCharacterCard(ctx, "guild1", &session.CharacterCard{CharacterID: id, DisplayName: "Name " + id})
+	}
+
+	choices := autocompleteCharacters(ctx, cmdCtx.Session, "guild1", "", false)
+	if len(choices) != maxAutocompleteChoices {
+		t.Fatalf("expected %d choices, got %d", maxAutocompleteChoices, len(choices))
 	}
 }
 

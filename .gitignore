@@ -6,6 +6,7 @@
 # Binaries and build artifacts
 bin/
 logs/
+data/
 *.exe
 *.exe~
 *.dll

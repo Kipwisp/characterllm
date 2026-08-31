@@ -93,6 +93,15 @@ const (
 // maxAutocompleteChoices is Discord's limit on autocomplete suggestions.
 const maxAutocompleteChoices = 25
 
+// capAutocompleteChoices trims choices to Discord's limit so an oversized
+// response cannot reject the entire autocomplete payload.
+func capAutocompleteChoices(choices []*discordgo.ApplicationCommandOptionChoice) []*discordgo.ApplicationCommandOptionChoice {
+	if len(choices) > maxAutocompleteChoices {
+		return choices[:maxAutocompleteChoices]
+	}
+	return choices
+}
+
 func deleteConfirmID(characterID string) string { return deleteConfirmPrefix + characterID }
 
 func deleteCancelID(characterID string) string { return deleteCancelPrefix + characterID }
@@ -303,8 +312,12 @@ func autocompleteCharacters(ctx context.Context, sm *session.Manager, guildID, q
 	if len(matched) == 0 {
 		return none
 	}
-	if includeCurrent && len(matched) >= maxAutocompleteChoices {
-		matched = matched[:maxAutocompleteChoices-1]
+	limit := maxAutocompleteChoices
+	if includeCurrent {
+		limit = maxAutocompleteChoices - 1
+	}
+	if len(matched) > limit {
+		matched = matched[:limit]
 	}
 
 	choices := make([]*discordgo.ApplicationCommandOptionChoice, 0, len(matched)+1)

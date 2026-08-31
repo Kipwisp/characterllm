@@ -9,6 +9,7 @@ import (
 	"characterllm/internal/config"
 	"characterllm/internal/images"
 	"characterllm/internal/llm"
+	"characterllm/internal/logger"
 	"characterllm/internal/research"
 	"characterllm/internal/session"
 
@@ -148,10 +149,13 @@ func (r *Registry) HandleAutocomplete(ctx context.Context, s DiscordSession, i *
 	default:
 		choices = autocompleteCharacters(ctx, r.session, i.GuildID, data.Options[0].StringValue(), false)
 	}
-	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+	choices = capAutocompleteChoices(choices)
+	if err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionApplicationCommandAutocompleteResult,
 		Data: &discordgo.InteractionResponseData{Choices: choices},
-	})
+	}); err != nil {
+		logger.FromContext(ctx).Error("failed to respond to autocomplete", "command", data.Name, "query", data.Options[0].StringValue(), "choices", len(choices), "error", err)
+	}
 }
 
 // HandleComponent dispatches message component interactions (buttons, select menus)
