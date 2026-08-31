@@ -15,7 +15,7 @@ func TestString(t *testing.T) {
 		expected string
 	}{
 		{"release version only", "v1.0.0", "abc1234", "v1.0.0"},
-		{"dev with commit", "dev", "abc1234", "dev (abc1234)"},
+		{"dev with commit", "dev", "abc1234", "abc1234"},
 		{"dev without commit", "dev", "none", "dev"},
 	}
 	for _, tc := range cases {

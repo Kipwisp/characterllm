@@ -1,5 +1,10 @@
 # CharacterLLM - AI Chatbot for Discord
 
+[![Go](https://img.shields.io/badge/go-1.25-00ADD8?logo=go&logoColor=white)](https://go.dev/)
+[![Docker](https://img.shields.io/badge/docker-latest-2496ED?logo=docker&logoColor=white)](https://ghcr.io/lutravox/characterllm)
+[![CI](https://img.shields.io/github/actions/workflow/status/lutravox/characterllm/docker.yml)](https://github.com/lutravox/characterllm/actions/workflows/docker.yml)
+[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
+
 CharacterLLM is a Discord bot that can create fun and interesting chatbot personalities based on any prompt you give it. Give it a character's name and it researches them on the web and builds a detailed persona of who they are, how they look, and how they speak, then roleplays as them in their own voice. You can also request modifications to the character (an alternate-universe twist, a personality tweak) or drop them into a scenario that shapes how the conversation starts.
 
 Conversations persist per character and per thread: the bot remembers what has happened, who you've clashed with, and the running story, even across days of chatting. A few things you can do with it:

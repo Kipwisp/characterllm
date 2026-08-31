@@ -13,7 +13,7 @@ func String() string {
 		return Version
 	}
 	if Commit != "none" {
-		return "dev (" + Commit + ")"
+		return Commit
 	}
-	return "dev"
+	return Version
 }
