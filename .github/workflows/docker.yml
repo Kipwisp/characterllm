@@ -18,12 +18,16 @@ jobs:
       - name: Resolve build args
         id: image
         run: |
-          echo "name=$(echo "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+          name=$(echo "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
+          echo "name=$name" >> "$GITHUB_OUTPUT"
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
             echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+            echo "$REGISTRY/$name:latest" >> "$GITHUB_OUTPUT.tags"
           else
             echo "version=dev" >> "$GITHUB_OUTPUT"
+            echo "$REGISTRY/$name:dev" >> "$GITHUB_OUTPUT.tags"
           fi
+          echo "$REGISTRY/$name:${GITHUB_SHA}" >> "$GITHUB_OUTPUT.tags"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -39,9 +43,7 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}:latest
-            ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}:${{ github.sha }}
+          tags: ${{ steps.image.outputs.tags }}
           build-args: |
             VERSION=${{ steps.image.outputs.version }}
             COMMIT=${{ github.sha }}
