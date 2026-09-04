@@ -15,6 +15,7 @@ type MockDiscordSession struct {
 	ChannelMessageEditComplexFn func(channelID, messageID string, edit *discordgo.MessageEdit) (*discordgo.Message, error)
 	ChannelMessageDeleteFn      func(channelID, messageID string) error
 	ChannelMessagesFn           func(channelID string, limit int, beforeID, afterID, aroundID string) ([]*discordgo.Message, error)
+	GuildMemberFn               func(guildID, userID string) (*discordgo.Member, error)
 	GuildChannelsFn             func(guildID string) ([]*discordgo.Channel, error)
 	InteractionRespondFn        func(interaction *discordgo.Interaction, response *discordgo.InteractionResponse) error
 	InteractionResponseEditFn   func(interaction *discordgo.Interaction, edit *discordgo.WebhookEdit) (*discordgo.Message, error)
@@ -72,6 +73,13 @@ func (m *MockDiscordSession) ChannelMessages(channelID string, limit int, before
 		return nil, nil
 	}
 	return m.ChannelMessagesFn(channelID, limit, beforeID, afterID, aroundID)
+}
+
+func (m *MockDiscordSession) GuildMember(guildID, userID string) (*discordgo.Member, error) {
+	if m.GuildMemberFn == nil {
+		return nil, nil
+	}
+	return m.GuildMemberFn(guildID, userID)
 }
 
 func (m *MockDiscordSession) GuildChannels(guildID string) ([]*discordgo.Channel, error) {

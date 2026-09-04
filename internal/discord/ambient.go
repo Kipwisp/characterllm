@@ -209,7 +209,7 @@ func (a *Ambient) buildTurn(ctx context.Context, guildID string, channels []stri
 	}
 
 	channelID := a.pickChannel(channels)
-	cue, imageDataURIs, err := buildTranscriptCue(ctx, a.Discord, a.Config, a.ImageClient, channelID)
+	cue, imageDataURIs, err := buildTranscriptCue(ctx, a.Discord, a.Config, a.ImageClient, guildID, channelID)
 	if err != nil {
 		logger.FromContext(ctx).Warn("ambient transcript fetch failed", "error", err)
 		return turn{}, false
@@ -307,12 +307,13 @@ func splitChannelLine(reply string) (number, rest string, ok bool) {
 // answered, framed with the header/footer cues, plus the transcript's image
 // data URIs. It returns an error when the fetch fails and an empty cue when
 // nothing remains after filtering.
-func buildTranscriptCue(ctx context.Context, s commands.DiscordSession, cfg *config.Config, imageClient images.ImageClient, channelID string) (string, []string, error) {
+func buildTranscriptCue(ctx context.Context, s commands.DiscordSession, cfg *config.Config, imageClient images.ImageClient, guildID, channelID string) (string, []string, error) {
 	msgs, err := s.ChannelMessages(channelID, cfg.Ambient.ReplyCount, "", "", "")
 	if err != nil {
 		return "", nil, err
 	}
-	lines, imageURLs := extractTranscript(msgs, s.GetUserID(), cfg)
+	names := resolveTranscriptNames(s, guildID, msgs, s.GetUserID())
+	lines, imageURLs := extractTranscript(msgs, s.GetUserID(), cfg, names)
 	if len(lines) == 0 {
 		return "", nil, nil
 	}
@@ -327,7 +328,7 @@ func buildTranscriptCue(ctx context.Context, s commands.DiscordSession, cfg *con
 // even though its content is not available. Messages the bot would already
 // have answered are left out: the bot's own messages, mentions of the bot,
 // and replies to a bot message that falls inside the fetched window.
-func extractTranscript(msgs []*discordgo.Message, botID string, cfg *config.Config) (lines, imageURLs []string) {
+func extractTranscript(msgs []*discordgo.Message, botID string, cfg *config.Config, names map[string]string) (lines, imageURLs []string) {
 	// Discord returns the fetched messages newest-first; reverse so the
 	// transcript reads chronologically.
 	for i, j := 0, len(msgs)-1; i < j; i, j = i+1, j-1 {
@@ -356,19 +357,46 @@ func extractTranscript(msgs []*discordgo.Message, botID string, cfg *config.Conf
 			line += markers
 		}
 		if line != "" {
-			lines = append(lines, transcriptName(m)+": "+line)
+			lines = append(lines, names[m.Author.ID]+": "+line)
 		}
 	}
 	return lines, imageURLs
 }
 
-// transcriptName returns the message author's display name for the
-// transcript: their guild nickname when set, otherwise their username.
-func transcriptName(m *discordgo.Message) string {
-	if m.Member != nil && m.Member.Nick != "" {
-		return m.Member.Nick
+// displayName resolves a user's display name the way Discord shows it:
+// the guild nickname when set, otherwise the global display name when set,
+// otherwise the username.
+func displayName(nick, globalName, username string) string {
+	switch {
+	case nick != "":
+		return nick
+	case globalName != "":
+		return globalName
+	default:
+		return username
 	}
-	return m.Author.Username
+}
+
+// resolveTranscriptNames maps each non-bot author's ID to the display name
+// for the transcript. The REST message fetch carries no member info, so the
+// guild nickname is looked up per author; a failed lookup leaves that author
+// on their global display name or username.
+func resolveTranscriptNames(s commands.DiscordSession, guildID string, msgs []*discordgo.Message, botID string) map[string]string {
+	names := make(map[string]string)
+	for _, m := range msgs {
+		if m.Author == nil || m.Author.ID == botID {
+			continue
+		}
+		if _, ok := names[m.Author.ID]; ok {
+			continue
+		}
+		nick := ""
+		if member, err := s.GuildMember(guildID, m.Author.ID); err == nil && member != nil {
+			nick = member.Nick
+		}
+		names[m.Author.ID] = displayName(nick, m.Author.GlobalName, m.Author.Username)
+	}
+	return names
 }
 
 // messageAddressesBot reports whether m mentions the bot or replies to a bot

@@ -2,6 +2,7 @@ package discord
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -771,6 +772,7 @@ func TestSplitChannelLine(t *testing.T) {
 
 func TestExtractTranscript_FileAttachments(t *testing.T) {
 	cfg := &config.Config{LLM: config.LLMConfig{Vision: true, MaxImages: 2}}
+	names := map[string]string{"a1": "Alice", "a2": "Bob", "a3": "Cara", "a4": "Dan"}
 	// Discord returns messages newest-first; extractTranscript reverses the
 	// slice in place, so each call gets a fresh one.
 	newestFirst := func() []*discordgo.Message {
@@ -785,7 +787,7 @@ func TestExtractTranscript_FileAttachments(t *testing.T) {
 		}
 	}
 
-	lines, imageURLs := extractTranscript(newestFirst(), "bot1", cfg)
+	lines, imageURLs := extractTranscript(newestFirst(), "bot1", cfg, names)
 	if len(lines) != 4 {
 		t.Fatalf("expected 4 lines, got %d: %v", len(lines), lines)
 	}
@@ -806,7 +808,7 @@ func TestExtractTranscript_FileAttachments(t *testing.T) {
 	}
 
 	// With vision disabled the image is dropped and the file markers remain.
-	lines, imageURLs = extractTranscript(newestFirst(), "bot1", &config.Config{LLM: config.LLMConfig{MaxImages: 2}})
+	lines, imageURLs = extractTranscript(newestFirst(), "bot1", &config.Config{LLM: config.LLMConfig{MaxImages: 2}}, names)
 	if len(lines) != 4 || lines[2] != "Cara: a photo" {
 		t.Errorf("vision disabled: expected the text lines unchanged, got %v", lines)
 	}
@@ -816,32 +818,61 @@ func TestExtractTranscript_FileAttachments(t *testing.T) {
 
 	fileOnly := []*discordgo.Message{{ID: "9", Author: &discordgo.User{ID: "a2", Username: "Bob"},
 		Attachments: []*discordgo.MessageAttachment{{Filename: "x.tar.gz", ContentType: "application/gzip"}}}}
-	lines, _ = extractTranscript(fileOnly, "bot1", cfg)
+	lines, _ = extractTranscript(fileOnly, "bot1", cfg, names)
 	if len(lines) != 1 || lines[0] != "Bob: [File: x.tar.gz]" {
 		t.Errorf("expected the file-only message to yield a marker line, got %v", lines)
 	}
 }
 
-func TestExtractTranscript_Nickname(t *testing.T) {
-	cfg := &config.Config{}
+func TestDisplayName_Precedence(t *testing.T) {
+	if got := displayName("Nick", "Global", "user"); got != "Nick" {
+		t.Errorf("expected the nickname to win, got %q", got)
+	}
+	if got := displayName("", "Global", "user"); got != "Global" {
+		t.Errorf("expected the global display name, got %q", got)
+	}
+	if got := displayName("", "", "user"); got != "user" {
+		t.Errorf("expected the username, got %q", got)
+	}
+}
+
+func TestResolveTranscriptNames(t *testing.T) {
+	s := &mockDiscordSession{
+		GuildMemberFn: func(guildID, userID string) (*discordgo.Member, error) {
+			switch userID {
+			case "a2":
+				return &discordgo.Member{Nick: "Bobby"}, nil
+			case "a3":
+				return &discordgo.Member{Nick: ""}, nil
+			case "a5":
+				return nil, errors.New("member gone")
+			default:
+				return &discordgo.Member{}, nil
+			}
+		},
+	}
 	msgs := []*discordgo.Message{
-		{ID: "2", Author: &discordgo.User{ID: "a2", Username: "Bob"}, Content: "hi",
-			Member: &discordgo.Member{Nick: "Bobby"}},
-		{ID: "1", Author: &discordgo.User{ID: "a1", Username: "Alice"}, Content: "hello"},
-		{ID: "3", Author: &discordgo.User{ID: "a3", Username: "Cara"}, Content: "yo",
-			Member: &discordgo.Member{Nick: ""}},
+		{Author: &discordgo.User{ID: "a1", Username: "alice", GlobalName: "Alice"}},
+		{Author: &discordgo.User{ID: "a2", Username: "bob"}},
+		{Author: &discordgo.User{ID: "a3", Username: "cara", GlobalName: "Cara"}},
+		{Author: &discordgo.User{ID: "a5", Username: "dan", GlobalName: "Dan"}},
+		{Author: &discordgo.User{ID: "a6", Username: "erin"}},
+		{Author: &discordgo.User{ID: "bot1", Username: "bot"}},
 	}
-	lines, _ := extractTranscript(msgs, "bot1", cfg)
-	if len(lines) != 3 {
-		t.Fatalf("expected 3 lines, got %d: %v", len(lines), lines)
+	names := resolveTranscriptNames(s, "g1", msgs, "bot1")
+	want := map[string]string{
+		"a1": "Alice",
+		"a2": "Bobby",
+		"a3": "Cara",
+		"a5": "Dan",
+		"a6": "erin",
 	}
-	if lines[0] != "Cara: yo" {
-		t.Errorf("expected the username when the nickname is empty, got %q", lines[0])
+	for id, w := range want {
+		if names[id] != w {
+			t.Errorf("user %s: expected %q, got %q", id, w, names[id])
+		}
 	}
-	if lines[1] != "Alice: hello" {
-		t.Errorf("expected username when no member info, got %q", lines[1])
-	}
-	if lines[2] != "Bobby: hi" {
-		t.Errorf("expected the guild nickname, got %q", lines[2])
+	if _, ok := names["bot1"]; ok {
+		t.Errorf("the bot should not be in the name map")
 	}
 }

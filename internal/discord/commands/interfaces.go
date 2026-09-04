@@ -14,6 +14,7 @@ type DiscordSession interface {
 	ChannelMessageEditComplex(channelID, messageID string, edit *discordgo.MessageEdit) (*discordgo.Message, error)
 	ChannelMessageDelete(channelID, messageID string) error
 	ChannelMessages(channelID string, limit int, beforeID, afterID, aroundID string) ([]*discordgo.Message, error)
+	GuildMember(guildID, userID string) (*discordgo.Member, error)
 	GuildChannels(guildID string) ([]*discordgo.Channel, error)
 	InteractionRespond(interaction *discordgo.Interaction, response *discordgo.InteractionResponse) error
 	InteractionResponseEdit(interaction *discordgo.Interaction, edit *discordgo.WebhookEdit) (*discordgo.Message, error)

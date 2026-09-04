@@ -53,6 +53,10 @@ func (w *sessionWrapper) ChannelMessages(channelID string, limit int, beforeID, 
 	return w.s.ChannelMessages(channelID, limit, beforeID, afterID, aroundID)
 }
 
+func (w *sessionWrapper) GuildMember(guildID, userID string) (*discordgo.Member, error) {
+	return w.s.GuildMember(guildID, userID)
+}
+
 func (w *sessionWrapper) GuildChannels(guildID string) ([]*discordgo.Channel, error) {
 	return w.s.GuildChannels(guildID)
 }

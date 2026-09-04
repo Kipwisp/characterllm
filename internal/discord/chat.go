@@ -95,7 +95,7 @@ func (c *Chat) ambientReplyPrompt(ctx context.Context, s commands.DiscordSession
 		logger.FromContext(ctx).Debug("ambient reply skipped by probability gate")
 		return "", nil, false
 	}
-	cue, imageDataURIs, err := buildTranscriptCue(ctx, s, c.Config, c.ImageClient, m.ChannelID)
+	cue, imageDataURIs, err := buildTranscriptCue(ctx, s, c.Config, c.ImageClient, m.GuildID, m.ChannelID)
 	if err != nil {
 		logger.FromContext(ctx).Warn("ambient reply transcript fetch failed", "error", err)
 		return "", nil, false
@@ -283,11 +283,11 @@ func (c *Chat) getPrompt(_ context.Context, s commands.DiscordSession, m *discor
 		prompt += markers
 	}
 
-	displayName := m.Author.Username
-	if m.Member != nil && m.Member.Nick != "" {
-		displayName = m.Member.Nick
+	nick := ""
+	if m.Member != nil {
+		nick = m.Member.Nick
 	}
-	return fmt.Sprintf("%s: %s", displayName, prompt), true
+	return fmt.Sprintf("%s: %s", displayName(nick, m.Author.GlobalName, m.Author.Username), prompt), true
 }
 
 // getActiveCharacter retrieves the active character for a guild, returning an error if none are set.
