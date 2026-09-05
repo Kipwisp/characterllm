@@ -19,7 +19,7 @@ func TestGenerateResponse_Timeout(t *testing.T) {
 
 	client := NewClient(server.URL, 100*time.Millisecond)
 	start := time.Now()
-	_, _, err := client.GenerateResponse(context.Background(), []Message{{Role: "user", Content: "hi"}}, "test")
+	_, _, err := client.GenerateResponse(context.Background(), []Message{TextMessage(RoleUser, "hi")}, "test")
 	elapsed := time.Since(start)
 
 	if err == nil {
@@ -80,7 +80,7 @@ func TestEstimateTokens(t *testing.T) {
 				}
 				w.WriteHeader(http.StatusNotFound)
 			},
-			messages:       []Message{{Role: "user", Content: "Hello world"}},
+			messages:       []Message{TextMessage(RoleUser, "Hello world")},
 			expectedTokens: 100,
 			wantRemote:     true,
 		},
@@ -89,7 +89,7 @@ func TestEstimateTokens(t *testing.T) {
 			serverHandler: func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusNotFound)
 			},
-			messages:       []Message{{Role: "user", Content: "Hello world"}}, // 11 chars / 4 = 2
+			messages:       []Message{TextMessage(RoleUser, "Hello world")}, // 11 chars / 4 = 2
 			expectedTokens: 2,
 			wantRemote:     false,
 		},
@@ -98,7 +98,7 @@ func TestEstimateTokens(t *testing.T) {
 			serverHandler: func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusInternalServerError)
 			},
-			messages:       []Message{{Role: "user", Content: "Hello world"}},
+			messages:       []Message{TextMessage(RoleUser, "Hello world")},
 			expectedTokens: 2,
 			wantRemote:     false,
 		},
@@ -108,7 +108,7 @@ func TestEstimateTokens(t *testing.T) {
 				w.WriteHeader(http.StatusNotFound)
 			},
 			messages: []Message{
-				{Role: "user", Content: "Hello", Reasoning: "Thinking..."}, // 5 + 11 = 16 chars / 4 = 4
+				Message{Role: RoleUser, Parts: []Part{{Kind: PartText, Text: "Hello"}}, Reasoning: "Thinking..."}, // 5 + 11 = 16 chars / 4 = 4
 			},
 			expectedTokens: 4,
 			wantRemote:     false,
@@ -149,7 +149,7 @@ func TestTokenizationCaching(t *testing.T) {
 	ctx := context.Background()
 
 	// First call should trigger the network request to verify support
-	client.EstimateTokens(ctx, []Message{{Role: "user", Content: "test"}})
+	client.EstimateTokens(ctx, []Message{TextMessage(RoleUser, "test")})
 	if !client.tokenizationTested {
 		t.Error("expected tokenizationTested to be true after first call")
 	}
@@ -220,10 +220,10 @@ func TestGenerateResponse(t *testing.T) {
 			handler: func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
 				json.NewEncoder(w).Encode(LlamaResponse{
-					Choices: []llamaChoice{{Message: llamaMessage{Role: "assistant", Content: json.RawMessage(`"Hello!"`), Reasoning: "I am greeting the user."}}},
+					Choices: []llamaChoice{{Message: llamaMessage{Role: RoleAssistant, Content: json.RawMessage(`"Hello!"`), Reasoning: "I am greeting the user."}}},
 				})
 			},
-			messages:       []Message{{Role: "user", Content: "Hi"}},
+			messages:       []Message{TextMessage(RoleUser, "Hi")},
 			model:          "test-model",
 			expectedResp:   "Hello!",
 			expectedReason: "I am greeting the user.",
@@ -235,7 +235,7 @@ func TestGenerateResponse(t *testing.T) {
 				w.WriteHeader(http.StatusBadRequest)
 				w.Write([]byte("bad request"))
 			},
-			messages: []Message{{Role: "user", Content: "Hi"}},
+			messages: []Message{TextMessage(RoleUser, "Hi")},
 			model:    "test-model",
 			wantErr:  true,
 		},
@@ -245,7 +245,7 @@ func TestGenerateResponse(t *testing.T) {
 				w.WriteHeader(http.StatusOK)
 				json.NewEncoder(w).Encode(LlamaResponse{Choices: nil})
 			},
-			messages: []Message{{Role: "user", Content: "Hi"}},
+			messages: []Message{TextMessage(RoleUser, "Hi")},
 			model:    "test-model",
 			wantErr:  true,
 		},
@@ -285,13 +285,13 @@ func TestGenerateResponse_Retry(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(LlamaResponse{
-			Choices: []llamaChoice{{Message: llamaMessage{Role: "assistant", Content: json.RawMessage(`"Retry Success"`), Reasoning: "Worked after retry"}}},
+			Choices: []llamaChoice{{Message: llamaMessage{Role: RoleAssistant, Content: json.RawMessage(`"Retry Success"`), Reasoning: "Worked after retry"}}},
 		})
 	}))
 	defer server.Close()
 
 	client := NewClient(server.URL, 30*time.Second)
-	resp, reason, err := client.GenerateResponse(context.Background(), []Message{{Role: "user", Content: "Hi"}}, "model")
+	resp, reason, err := client.GenerateResponse(context.Background(), []Message{TextMessage(RoleUser, "Hi")}, "model")
 
 	if err != nil {
 		t.Fatalf("expected success after retry, got error: %v", err)
@@ -308,21 +308,28 @@ func TestGenerateResponse_Retry(t *testing.T) {
 }
 
 func TestToLlamaMessages_Plain(t *testing.T) {
-	msgs, err := toLlamaMessages([]Message{{Role: "user", Content: "hi"}})
+	msgs, err := toLlamaMessages([]Message{TextMessage(RoleUser, "hi")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := string(msgs[0].Content); got != `"hi"` {
-		t.Errorf("expected plain string content, got %s", got)
+	var parts []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
 	}
-	if msgs[0].Role != "user" {
+	if err := json.Unmarshal(msgs[0].Content, &parts); err != nil {
+		t.Fatal(err)
+	}
+	if len(parts) != 1 || parts[0].Type != "text" || parts[0].Text != "hi" {
+		t.Errorf("expected single text part, got %s", msgs[0].Content)
+	}
+	if msgs[0].Role != RoleUser {
 		t.Errorf("unexpected role: %q", msgs[0].Role)
 	}
 }
 
 func TestToLlamaMessages_WithImages(t *testing.T) {
 	msgs, err := toLlamaMessages([]Message{
-		{Role: "user", Content: "look at this", Images: []string{"data:image/jpeg;base64,abc"}},
+		Message{Role: RoleUser, Parts: TextWithImages("look at this", []string{"data:image/jpeg;base64,abc"})},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -338,7 +345,7 @@ func TestToLlamaMessages_WithImages(t *testing.T) {
 	if err := json.Unmarshal(msgs[0].Content, &parts); err != nil {
 		t.Fatal(err)
 	}
-	if msgs[0].Role != "user" || len(parts) != 2 {
+	if msgs[0].Role != RoleUser || len(parts) != 2 {
 		t.Fatalf("unexpected structure: role=%q parts=%+v", msgs[0].Role, parts)
 	}
 	if parts[0].Type != "text" || parts[0].Text != "look at this" {
@@ -354,7 +361,7 @@ func TestLlamaMessageText_StringContent(t *testing.T) {
 	if err := json.Unmarshal([]byte(`{"role":"assistant","content":"hello"}`), &w); err != nil {
 		t.Fatal(err)
 	}
-	if w.Role != "assistant" || w.text() != "hello" {
+	if w.Role != RoleAssistant || w.text() != "hello" {
 		t.Errorf("unexpected message: role=%q text=%q", w.Role, w.text())
 	}
 }
@@ -388,7 +395,7 @@ func TestOpenAIClient_AuthHeader(t *testing.T) {
 		default:
 			w.WriteHeader(http.StatusOK)
 			json.NewEncoder(w).Encode(LlamaResponse{
-				Choices: []llamaChoice{{Message: llamaMessage{Role: "assistant", Content: json.RawMessage(`"ok"`)}}},
+				Choices: []llamaChoice{{Message: llamaMessage{Role: RoleAssistant, Content: json.RawMessage(`"ok"`)}}},
 			})
 		}
 	}))
@@ -400,7 +407,7 @@ func TestOpenAIClient_AuthHeader(t *testing.T) {
 	if _, err := client.Ping(context.Background()); err != nil {
 		t.Fatalf("Ping() error: %v", err)
 	}
-	if _, _, err := client.GenerateResponse(context.Background(), []Message{{Role: "user", Content: "hi"}}, "model"); err != nil {
+	if _, _, err := client.GenerateResponse(context.Background(), []Message{TextMessage(RoleUser, "hi")}, "model"); err != nil {
 		t.Fatalf("GenerateResponse() error: %v", err)
 	}
 	if seenAuth != 2 {
@@ -411,7 +418,7 @@ func TestOpenAIClient_AuthHeader(t *testing.T) {
 	}
 
 	noAuth := NewClient(server.URL, 30*time.Second).(*OpenAIClient)
-	if _, _, err := noAuth.GenerateResponse(context.Background(), []Message{{Role: "user", Content: "hi"}}, "model"); err != nil {
+	if _, _, err := noAuth.GenerateResponse(context.Background(), []Message{TextMessage(RoleUser, "hi")}, "model"); err != nil {
 		t.Fatalf("GenerateResponse() error: %v", err)
 	}
 	if seenNoAuth != 1 {

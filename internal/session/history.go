@@ -3,9 +3,14 @@ package session
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"characterllm/internal/llm"
 )
+
+// ImageMarkerPrefix introduces a numbered image placeholder in a stored
+// transcript; see ImageMarker.
+const ImageMarkerPrefix = "[IMG-"
 
 // historyStore persists per-thread chat history messages.
 type historyStore struct{ *core }
@@ -30,11 +35,15 @@ func (s *historyStore) GetHistory(ctx context.Context, guildID, threadID string,
 	defer rows.Close()
 
 	for rows.Next() {
-		var msg llm.Message
-		if err := rows.Scan(&msg.Role, &msg.Content); err != nil {
+		var role, content string
+		if err := rows.Scan(&role, &content); err != nil {
 			return nil, fmt.Errorf("failed to scan history message for guild %s: %w", guildID, err)
 		}
-		messages = append(messages, msg)
+		parsed, err := llm.ParseRole(role)
+		if err != nil {
+			return nil, fmt.Errorf("history row for guild %s: %w", guildID, err)
+		}
+		messages = append(messages, llm.TextMessage(parsed, content))
 	}
 
 	if err := rows.Err(); err != nil {
@@ -64,40 +73,71 @@ func (s *historyStore) GetLastCharacterMessage(ctx context.Context, guildID, cha
 }
 
 // SaveMessage persists a new message to the chat history for a guild and thread.
-func (s *historyStore) SaveMessage(ctx context.Context, guildID, threadID, role, content string) error {
+func (s *historyStore) SaveMessage(ctx context.Context, guildID, threadID string, role llm.Role, content string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	charID := s.getCurrentCharacterID(ctx, guildID)
-	_, err := s.db.ExecContext(ctx, "INSERT INTO chat_history (guild_id, character_id, thread_id, role, content) VALUES (?, ?, ?, ?, ?)", guildID, charID, threadID, role, content)
+	_, err := s.db.ExecContext(ctx, "INSERT INTO chat_history (guild_id, character_id, thread_id, role, content) VALUES (?, ?, ?, ?, ?)", guildID, charID, threadID, role.String(), content)
 	if err != nil {
 		return fmt.Errorf("failed to save message for guild %s, thread %s: %w", guildID, threadID, err)
 	}
 	return nil
 }
 
-// AppendToLastUserMessage appends suffix to the most recent user message for a
-// guild and thread, e.g. to attach a harvested image description to the turn.
-func (s *historyStore) AppendToLastUserMessage(ctx context.Context, guildID, threadID, suffix string) error {
+// ImageMarker is the persisted placeholder for the 1-based image position in
+// a stored transcript. It is resolved to a harvested image note after the
+// reply, so each description lands under the line whose image it describes.
+func ImageMarker(i int) string { return fmt.Sprintf("%s%d]", ImageMarkerPrefix, i) }
+
+// ResolveImageNotes replaces the image markers in the most recent user
+// message with the harvested notes: marker i takes note i (both in the order
+// the model saw the images), markers without a note become
+// [Image: no description] so the image's existence stays in the record, and
+// surplus notes are appended at the end as a single [Image: ...] line. It
+// returns the persisted content so the caller can log the resulting row.
+func (s *historyStore) ResolveImageNotes(ctx context.Context, guildID, threadID string, notes []string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	charID := s.getCurrentCharacterID(ctx, guildID)
-	res, err := s.db.Exec(`UPDATE chat_history SET content = content || ?
+	var content string
+	err := s.db.QueryRow(`SELECT content FROM chat_history
 		WHERE id = (SELECT MAX(id) FROM chat_history
 			WHERE guild_id = ? AND character_id = ? AND thread_id = ? AND role = 'user')`,
-		suffix, guildID, charID, threadID)
+		guildID, charID, threadID).Scan(&content)
 	if err != nil {
-		return fmt.Errorf("failed to append to last user message for guild %s, thread %s: %w", guildID, threadID, err)
+		return "", fmt.Errorf("failed to read last user message for guild %s, thread %s: %w", guildID, threadID, err)
 	}
-	n, err := res.RowsAffected()
+
+	resolved := 0
+	for i := 1; ; i++ {
+		marker := "\n" + ImageMarker(i)
+		if !strings.Contains(content, marker) {
+			break
+		}
+		resolved++
+		if i-1 < len(notes) {
+			content = strings.Replace(content, marker, "\n[Image: "+notes[i-1]+"]", 1)
+		} else {
+			content = strings.Replace(content, marker, "\n[Image: no description]", 1)
+		}
+	}
+	if resolved == 0 {
+		return content, nil
+	}
+	if len(notes) > resolved {
+		content += "\n[Image: " + strings.Join(notes[resolved:], "; ") + "]"
+	}
+
+	_, err = s.db.Exec(`UPDATE chat_history SET content = ?
+		WHERE id = (SELECT MAX(id) FROM chat_history
+			WHERE guild_id = ? AND character_id = ? AND thread_id = ? AND role = 'user')`,
+		content, guildID, charID, threadID)
 	if err != nil {
-		return fmt.Errorf("failed to check append result: %w", err)
+		return "", fmt.Errorf("failed to resolve image notes for guild %s, thread %s: %w", guildID, threadID, err)
 	}
-	if n == 0 {
-		return fmt.Errorf("no user message found to append to for guild %s, thread %s", guildID, threadID)
-	}
-	return nil
+	return content, nil
 }
 
 // ClearHistory deletes all chat history for the current character in a guild and thread.

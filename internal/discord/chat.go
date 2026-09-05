@@ -50,63 +50,82 @@ func (c *Chat) Handle(s commands.DiscordSession, m *discordgo.MessageCreate) {
 
 	prompt, ok := c.getPrompt(ctx, s, m)
 	kind := audit.KindChat
-	var imageDataURIs []string
+	var userMsg llm.Message
+	var record string
 	if ok {
-		// Images are ephemeral: they ride along in this turn's prompt only and are never persisted to history.
+		userMsg = llm.TextMessage(llm.RoleUser, prompt)
+		// Images are ephemeral: they ride along in this turn's prompt only. The
+		// persisted record carries one placeholder per image so each harvested
+		// note lands on its own [Image: ...] line after the reply.
 		if c.Config.LLM.Vision {
-			imageDataURIs = c.collectImageAttachments(ctx, m)
+			if uris := c.collectImageURIs(ctx, m); len(uris) > 0 {
+				userMsg = llm.Message{Role: llm.RoleUser, Parts: llm.TextWithImages(prompt, uris)}
+				record = prompt
+				for i := range uris {
+					record += "\n" + session.ImageMarker(i+1)
+				}
+			}
 		}
 	} else {
-		prompt, imageDataURIs, ok = c.ambientReplyPrompt(ctx, s, m)
+		userMsg, record, ok = c.ambientReplyPrompt(ctx, s, m)
 		if !ok {
 			return
 		}
 		kind = audit.KindAmbientReply
+		c.runTurn(ctx, s, m.GuildID, turn{
+			ChannelID:   m.ChannelID,
+			UserMessage: userMsg,
+			Record:      record,
+			ReplyRef:    &discordgo.MessageReference{MessageID: m.ID},
+			Route:       identityRoute,
+		}, kind, reqID)
+		return
 	}
 
 	c.runTurn(ctx, s, m.GuildID, turn{
-		ChannelID: m.ChannelID,
-		Content:   prompt,
-		Images:    imageDataURIs,
-		ReplyRef:  &discordgo.MessageReference{MessageID: m.ID},
-		Route:     identityRoute,
+		ChannelID:   m.ChannelID,
+		UserMessage: userMsg,
+		Record:      record,
+		ReplyRef:    &discordgo.MessageReference{MessageID: m.ID},
+		Route:       identityRoute,
 	}, kind, reqID)
 }
 
 // ambientReplyPrompt applies the ambient reply chance: in one of the
 // guild's ambient channels, any user message that does not address the bot
 // gives the bot a probability-gated chance to join in.
-func (c *Chat) ambientReplyPrompt(ctx context.Context, s commands.DiscordSession, m *discordgo.MessageCreate) (string, []string, bool) {
+func (c *Chat) ambientReplyPrompt(ctx context.Context, s commands.DiscordSession, m *discordgo.MessageCreate) (llm.Message, string, bool) {
 	if !c.Config.Ambient.Enabled {
-		return "", nil, false
+		return llm.Message{}, "", false
 	}
+
 	if strings.Contains(m.Content, s.GetUserMention()) {
-		return "", nil, false
+		return llm.Message{}, "", false
 	}
 	channelIDs, err := c.Session.GetAmbientChannels(ctx, m.GuildID)
 	if err != nil {
 		logger.FromContext(ctx).Error("failed to read ambient channels", "error", err)
-		return "", nil, false
+		return llm.Message{}, "", false
 	}
 	if !slices.Contains(channelIDs, m.ChannelID) {
-		return "", nil, false
+		return llm.Message{}, "", false
 	}
 	if c.roll() >= c.Config.Ambient.ReplyProbability {
 		logger.FromContext(ctx).Debug("ambient reply skipped by probability gate")
-		return "", nil, false
+		return llm.Message{}, "", false
 	}
-	cue, imageDataURIs, err := buildTranscriptCue(ctx, s, c.Config, c.ImageClient, m.GuildID, m.ChannelID)
+	msg, record, err := buildTranscriptCue(ctx, s, c.Config, c.ImageClient, m.GuildID, m.ChannelID)
 	if err != nil {
 		logger.FromContext(ctx).Warn("ambient reply transcript fetch failed", "error", err)
-		return "", nil, false
+		return llm.Message{}, "", false
 	}
-	if cue == "" {
+	if len(msg.Parts) == 0 {
 		logger.FromContext(ctx).Debug("ambient reply skipped: empty transcript")
-		return "", nil, false
+		return llm.Message{}, "", false
 	}
 
 	logger.FromContext(ctx).Debug("sending ambient reply")
-	return cue, imageDataURIs, true
+	return msg, record, true
 }
 
 // roll returns the gate's probability roll, defaulting to math/rand when no
@@ -129,14 +148,15 @@ var identityRoute TurnRoute = func(content, channelID string) (string, string) {
 	return content, channelID
 }
 
-// turn is one fully prepared conversation turn: what to say, where to send
-// it, and how to finalize the reply before it is stored and sent.
+// turn is one fully prepared conversation turn: the user message to send to
+// the LLM, where to post the reply, and how to finalize the reply before it
+// is stored and sent.
 type turn struct {
-	ChannelID string
-	Content   string
-	Images    []string
-	ReplyRef  *discordgo.MessageReference // nil → plain message, not a reply
-	Route     TurnRoute
+	ChannelID   string
+	UserMessage llm.Message                 // Role is always "user"
+	Record      string                      // db persisted form of the user turn; empty → User.Text()
+	ReplyRef    *discordgo.MessageReference // nil → plain message, not a reply
+	Route       TurnRoute
 }
 
 // runTurn executes one full conversation turn: resolve the active character
@@ -151,7 +171,7 @@ func (c *Chat) runTurn(ctx context.Context, s commands.DiscordSession, guildID s
 	details, err := c.getActiveCharacter(ctx, guildID)
 	if err != nil {
 		logger.FromContext(ctx).Error("error getting active character", "error", err)
-		if err := c.sendTurnMessage(ctx, s, t.ChannelID, t.ReplyRef, responses.General.NoCharacterSet); err != nil {
+		if err := c.sendTurnMessage(s, t.ChannelID, t.ReplyRef, responses.General.NoCharacterSet); err != nil {
 			logger.FromContext(ctx).Error("failed to send turn message", "error", err)
 		}
 		return
@@ -172,9 +192,12 @@ func (c *Chat) runTurn(ctx context.Context, s commands.DiscordSession, guildID s
 	defer c.Locks.Lock(guildID, threadID)()
 
 	// Persist the incoming message before assembling the prompt
-	userMsg := llm.Message{Role: "user", Content: t.Content, Images: t.Images}
-	userTokens := c.LLM.EstimateTokens(ctx, []llm.Message{userMsg})
-	if err := c.Session.SaveMessage(ctx, guildID, threadID, "user", t.Content); err != nil {
+	userTokens := c.LLM.EstimateTokens(ctx, []llm.Message{t.UserMessage})
+	record := t.UserMessage.Text()
+	if t.Record != "" {
+		record = t.Record
+	}
+	if err := c.Session.SaveMessage(ctx, guildID, threadID, llm.RoleUser, record); err != nil {
 		logger.FromContext(ctx).Error("error saving user message", "error", err)
 	}
 	if err := c.Session.TouchThread(ctx, guildID, details.CharacterID, threadID); err != nil {
@@ -183,17 +206,17 @@ func (c *Chat) runTurn(ctx context.Context, s commands.DiscordSession, guildID s
 
 	// compactionNeeded is true when the prompt exceeded the compaction target,
 	// which triggers compaction after the reply.
-	messages, compactionNeeded, err := c.PromptBuilder.Build(ctx, guildID, threadID, details, t.Content, t.Images, userTokens)
+	messages, compactionNeeded, err := c.PromptBuilder.Build(ctx, guildID, threadID, details, t.UserMessage, userTokens)
 	if err != nil {
 		logger.FromContext(ctx).Error("error assembling prompt", "error", err)
-		if err := c.sendTurnMessage(ctx, s, t.ChannelID, t.ReplyRef, "Sorry, I had trouble remembering our conversation."); err != nil {
+		if err := c.sendTurnMessage(s, t.ChannelID, t.ReplyRef, "Sorry, I had trouble remembering our conversation."); err != nil {
 			logger.FromContext(ctx).Error("failed to send turn message", "error", err)
 		}
 		return
 	}
 
 	// Generate and send response
-	if err := c.processChat(ctx, s, guildID, t, threadID, details.CharacterID, t.Content, messages, reqID, kind); err != nil {
+	if err := c.processChat(ctx, s, guildID, t, threadID, details.CharacterID, messages, reqID, kind); err != nil {
 		logger.FromContext(ctx).Error("error processing chat", "error", err)
 	}
 
@@ -205,7 +228,7 @@ func (c *Chat) runTurn(ctx context.Context, s commands.DiscordSession, guildID s
 
 // sendTurnMessage sends content as a reply to replyRef, or as a plain
 // channel message when replyRef is nil.
-func (c *Chat) sendTurnMessage(ctx context.Context, s commands.DiscordSession, channelID string, replyRef *discordgo.MessageReference, content string) error {
+func (c *Chat) sendTurnMessage(s commands.DiscordSession, channelID string, replyRef *discordgo.MessageReference, content string) error {
 	if replyRef != nil {
 		_, err := s.ChannelMessageSendReply(channelID, content, replyRef)
 		return err
@@ -216,23 +239,23 @@ func (c *Chat) sendTurnMessage(ctx context.Context, s commands.DiscordSession, c
 
 var imageNoteRe = regexp.MustCompile(`(?s)<image_note>.*?</image_note>`)
 
-// splitImageNotes separates the <image_note> blocks the model
-// prepends for image messages from the user-visible reply.
-func splitImageNotes(response string) (visible, record string) {
-	notes := imageNoteRe.FindAllStringSubmatch(response, -1)
+// splitImageNotes separates the <image_note> blocks the model prepends for
+// image messages from the user-visible reply. The notes come back in the
+// order the model saw the images.
+func splitImageNotes(response string) (visible string, notes []string) {
+	matches := imageNoteRe.FindAllStringSubmatch(response, -1)
 	visible = strings.TrimSpace(imageNoteRe.ReplaceAllString(response, ""))
 
-	var parts []string
-	for _, n := range notes {
-		if desc := strings.TrimSpace(n[0][len("<image_note>") : len(n[0])-len("</image_note>")]); desc != "" {
-			parts = append(parts, desc)
+	for _, m := range matches {
+		if desc := strings.TrimSpace(m[0][len("<image_note>") : len(m[0])-len("</image_note>")]); desc != "" {
+			notes = append(notes, desc)
 		}
 	}
-	return visible, strings.Join(parts, "; ")
+	return visible, notes
 }
 
-// collectImageAttachments fetches the message's image attachments (up to LLM.MaxImages) as processed data URIs.
-func (c *Chat) collectImageAttachments(ctx context.Context, m *discordgo.MessageCreate) []string {
+// collectImageURIs fetches the message's image attachments (up to LLM.MaxImages) as processed data URIs.
+func (c *Chat) collectImageURIs(ctx context.Context, m *discordgo.MessageCreate) []string {
 	var urls []string
 	for _, a := range m.Attachments {
 		if strings.HasPrefix(a.ContentType, "image/") && len(urls) < c.Config.LLM.MaxImages {
@@ -303,7 +326,7 @@ func (c *Chat) getActiveCharacter(ctx context.Context, guildID string) (*session
 }
 
 // processChat handles the core cycle of generating an LLM response, logging it, and sending it to Discord.
-func (c *Chat) processChat(ctx context.Context, s commands.DiscordSession, guildID string, t turn, threadID, charID, prompt string, messages []llm.Message, reqID string, kind audit.Kind) error {
+func (c *Chat) processChat(ctx context.Context, s commands.DiscordSession, guildID string, t turn, threadID, charID string, messages []llm.Message, reqID string, kind audit.Kind) error {
 	start := time.Now()
 	// Generate response
 	fullResponse, reasoning, err := c.LLM.GenerateResponse(ctx, messages, c.Config.LLM.Model)
@@ -314,39 +337,52 @@ func (c *Chat) processChat(ctx context.Context, s commands.DiscordSession, guild
 	}
 	latency := time.Since(start)
 
-	// Log the raw response (including any image notes) for debugging
-	system := ""
-	if len(messages) > 0 && messages[0].Role == "system" {
-		system = messages[0].Content
-	}
-	c.Audit.Log(ctx, guildID, threadID, charID, reqID, audit.Turn{
-		Kind:      kind,
-		Model:     c.Config.LLM.Model,
-		Latency:   latency,
-		System:    system,
-		Prompt:    prompt,
-		Reasoning: reasoning,
-		Response:  fullResponse,
-	})
-
-	visible, imageNotes := splitImageNotes(fullResponse)
+	visible, notes := splitImageNotes(fullResponse)
 	if visible == "" {
 		visible = fullResponse
 	}
 	visible, t.ChannelID = t.Route(visible, t.ChannelID)
 
 	// Send the final response as a reply to the user, or plainly when there is no originating message
-	if sendErr := c.sendTurnMessage(ctx, s, t.ChannelID, t.ReplyRef, visible); sendErr != nil {
+	if sendErr := c.sendTurnMessage(s, t.ChannelID, t.ReplyRef, visible); sendErr != nil {
 		return fmt.Errorf("error sending response: %v", sendErr)
 	}
 
-	c.Session.SaveMessage(ctx, guildID, threadID, "assistant", visible)
+	c.Session.SaveMessage(ctx, guildID, threadID, llm.RoleAssistant, visible)
 
-	// Attach the image descriptions to the user's turn so future prompts and compaction can see what the (ephemeral) images depicted.
-	if imageNotes != "" {
-		if err := c.Session.AppendToLastUserMessage(ctx, guildID, threadID, "\n[Image: "+imageNotes+"]"); err != nil {
+	// Attach the image descriptions to the user's turn so future prompts and
+	// compaction can see what the (ephemeral) images depicted. The persisted
+	// record carries one placeholder per image; resolution always runs when
+	// markers are present so placeholders without a note are removed.
+	record := t.UserMessage.Text()
+	if t.Record != "" {
+		record = t.Record
+	}
+	if strings.Contains(record, session.ImageMarkerPrefix) {
+		if resolved, err := c.Session.ResolveImageNotes(ctx, guildID, threadID, notes); err != nil {
 			logger.FromContext(ctx).Error("failed to attach image note to history", "error", err)
+		} else {
+			record = resolved
 		}
 	}
+
+	// Log the exchange with the user input in the form it is persisted, so
+	// the audit trail matches what future prompts will see.
+	system := ""
+	if len(messages) > 0 && messages[0].Role == llm.RoleSystem {
+		system = messages[0].Text()
+	}
+	if n := len(t.UserMessage.ImageURIs()); n > 0 {
+		record += fmt.Sprintf("\n[%d image(s) attached]", n)
+	}
+	c.Audit.Log(ctx, guildID, threadID, charID, reqID, audit.Turn{
+		Kind:      kind,
+		Model:     c.Config.LLM.Model,
+		Latency:   latency,
+		System:    system,
+		Prompt:    record,
+		Reasoning: reasoning,
+		Response:  fullResponse,
+	})
 	return nil
 }

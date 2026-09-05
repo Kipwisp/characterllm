@@ -13,6 +13,7 @@ import (
 	"characterllm/internal/config"
 	"characterllm/internal/discord/commands"
 	"characterllm/internal/images"
+	"characterllm/internal/llm"
 	"characterllm/internal/logger"
 	"characterllm/internal/session"
 
@@ -209,15 +210,15 @@ func (a *Ambient) buildTurn(ctx context.Context, guildID string, channels []stri
 	}
 
 	channelID := a.pickChannel(channels)
-	cue, imageDataURIs, err := buildTranscriptCue(ctx, a.Discord, a.Config, a.ImageClient, guildID, channelID)
+	msg, record, err := buildTranscriptCue(ctx, a.Discord, a.Config, a.ImageClient, guildID, channelID)
 	if err != nil {
 		logger.FromContext(ctx).Warn("ambient transcript fetch failed", "error", err)
 		return turn{}, false
 	}
-	if cue == "" {
-		return turn{ChannelID: channelID, Content: ambientTopicCue, Route: identityRoute}, true
+	if len(msg.Parts) == 0 {
+		return turn{ChannelID: channelID, UserMessage: llm.TextMessage(llm.RoleUser, ambientTopicCue), Route: identityRoute}, true
 	}
-	return turn{ChannelID: channelID, Content: cue, Images: imageDataURIs, Route: identityRoute}, true
+	return turn{ChannelID: channelID, UserMessage: msg, Record: record, Route: identityRoute}, true
 }
 
 // topicTurn builds the topic-mode turn. With one ambient channel the turn
@@ -225,7 +226,7 @@ func (a *Ambient) buildTurn(ctx context.Context, guildID string, channels []stri
 // and the model chooses the destination via a CHANNEL: line.
 func (a *Ambient) topicTurn(ctx context.Context, guildID string, channels []string) turn {
 	if len(channels) == 1 {
-		return turn{ChannelID: channels[0], Content: ambientTopicCue, Route: identityRoute}
+		return turn{ChannelID: channels[0], UserMessage: llm.TextMessage(llm.RoleUser, ambientTopicCue), Route: identityRoute}
 	}
 	list := make([]string, len(channels))
 	for i, name := range a.channelNames(ctx, guildID, channels) {
@@ -234,9 +235,9 @@ func (a *Ambient) topicTurn(ctx context.Context, guildID string, channels []stri
 	content := ambientTopicCue + "\n" + ambientChannelListLabel + "\n" + strings.Join(list, "\n") +
 		"\n" + ambientChannelPickInstruction
 	return turn{
-		ChannelID: a.pickChannel(channels),
-		Content:   content,
-		Route:     a.channelRoute(ctx, channels),
+		ChannelID:   a.pickChannel(channels),
+		UserMessage: llm.TextMessage(llm.RoleUser, content),
+		Route:       a.channelRoute(ctx, channels),
 	}
 }
 
@@ -303,32 +304,79 @@ func splitChannelLine(reply string) (number, rest string, ok bool) {
 }
 
 // buildTranscriptCue fetches the channel's recent messages and builds the
-// reply-mode cue: the transcript of messages the bot has not already
-// answered, framed with the header/footer cues, plus the transcript's image
-// data URIs. It returns an error when the fetch fails and an empty cue when
-// nothing remains after filtering.
-func buildTranscriptCue(ctx context.Context, s commands.DiscordSession, cfg *config.Config, imageClient images.ImageClient, guildID, channelID string) (string, []string, error) {
+// reply-mode user message: the transcript of messages the bot has not already
+// answered, framed with the header/footer cues. It returns an error when the
+// fetch fails and an empty message when nothing remains after filtering.
+func buildTranscriptCue(ctx context.Context, s commands.DiscordSession, cfg *config.Config, imageClient images.ImageClient, guildID, channelID string) (llm.Message, string, error) {
 	msgs, err := s.ChannelMessages(channelID, cfg.Ambient.ReplyCount, "", "", "")
 	if err != nil {
-		return "", nil, err
+		return llm.Message{}, "", err
 	}
 	names := resolveTranscriptNames(s, guildID, msgs, s.GetUserID())
-	lines, imageURLs := extractTranscript(msgs, s.GetUserID(), cfg, names)
-	if len(lines) == 0 {
-		return "", nil, nil
+	parts := extractTranscript(msgs, s.GetUserID(), cfg, names)
+	if len(parts) == 0 {
+		return llm.Message{}, "", nil
 	}
-	content := ambientTranscriptHeader + "\n" + strings.Join(lines, "\n") + "\n" + ambientTranscriptFooter
-	return content, collectImageURIs(ctx, imageClient, imageURLs), nil
+
+	duriByURL := make(map[string]string)
+	for _, p := range parts {
+		if p.Kind == llm.PartText {
+			continue
+		}
+		if _, ok := duriByURL[p.ImageURL]; !ok {
+			duri, err := imageClient.ImageToDataURI(ctx, p.ImageURL)
+			if err != nil {
+				logger.FromContext(ctx).Warn("skipping unreadable transcript image", "url", p.ImageURL, "error", err)
+				continue
+			}
+			duriByURL[p.ImageURL] = duri
+		}
+	}
+
+	// Interleave each image under its speaker's line, flushing the text
+	// accumulated so far first; unreadable images are dropped. The stored
+	// record mirrors the transcript with a numbered placeholder under each
+	// image's line, so the model's notes can be resolved back to the right
+	// speaker after the reply.
+	var out []llm.Part
+	var buf, record strings.Builder
+	buf.WriteString(ambientTranscriptHeader)
+	record.WriteString(ambientTranscriptHeader)
+	imageCount := 0
+	for _, p := range parts {
+		if p.Kind == llm.PartText {
+			buf.WriteString("\n")
+			buf.WriteString(p.Text)
+			record.WriteString("\n")
+			record.WriteString(p.Text)
+			continue
+		}
+		duri, ok := duriByURL[p.ImageURL]
+		if !ok {
+			continue
+		}
+		out = append(out, llm.Part{Kind: llm.PartText, Text: buf.String()})
+		buf.Reset()
+		out = append(out, llm.Part{Kind: llm.PartImage, ImageURL: duri})
+		imageCount++
+		record.WriteString("\n")
+		record.WriteString(session.ImageMarker(imageCount))
+	}
+	buf.WriteString("\n" + ambientTranscriptFooter)
+	out = append(out, llm.Part{Kind: llm.PartText, Text: buf.String()})
+	record.WriteString("\n" + ambientTranscriptFooter)
+	return llm.Message{Role: llm.RoleUser, Parts: out}, record.String(), nil
 }
 
-// extractTranscript formats the channel chatter as "Name: message" lines and
-// collects the messages' image attachment URLs (up to LLM.MaxImages, only
-// when vision is enabled). Non-image file attachments are referenced inline
-// as "[File: name]" so the transcript still shows that something was shared
-// even though its content is not available. Messages the bot would already
-// have answered are left out: the bot's own messages, mentions of the bot,
-// and replies to a bot message that falls inside the fetched window.
-func extractTranscript(msgs []*discordgo.Message, botID string, cfg *config.Config, names map[string]string) (lines, imageURLs []string) {
+// extractTranscript formats the channel chatter into ordered transcript parts:
+// a "Name: message" text part per message, with image parts (up to
+// LLM.MaxImages total, only when vision is enabled) placed directly after
+// that message's line. Non-image file attachments are referenced inline as
+// "[File: name]" so the transcript still shows that something was shared even
+// though its content is not available. Messages the bot would already have
+// answered are left out: the bot's own messages, mentions of the bot, and
+// replies to a bot message that falls inside the fetched window.
+func extractTranscript(msgs []*discordgo.Message, botID string, cfg *config.Config, names map[string]string) []llm.Part {
 	// Discord returns the fetched messages newest-first; reverse so the
 	// transcript reads chronologically.
 	for i, j := 0, len(msgs)-1; i < j; i, j = i+1, j-1 {
@@ -338,15 +386,20 @@ func extractTranscript(msgs []*discordgo.Message, botID string, cfg *config.Conf
 	for _, m := range msgs {
 		byID[m.ID] = m
 	}
+
+	var parts []llm.Part
+	remaining := cfg.LLM.MaxImages
 	for _, m := range msgs {
 		if m.Author == nil || m.Author.ID == botID || messageAddressesBot(m, botID, byID) {
 			continue
 		}
 		line := m.Content
+		var imageParts []llm.Part
 		if cfg.LLM.Vision {
 			for _, att := range m.Attachments {
-				if strings.HasPrefix(att.ContentType, "image/") && len(imageURLs) < cfg.LLM.MaxImages {
-					imageURLs = append(imageURLs, att.URL)
+				if strings.HasPrefix(att.ContentType, "image/") && remaining > 0 {
+					imageParts = append(imageParts, llm.Part{Kind: llm.PartImage, ImageURL: att.URL})
+					remaining--
 				}
 			}
 		}
@@ -356,11 +409,17 @@ func extractTranscript(msgs []*discordgo.Message, botID string, cfg *config.Conf
 			}
 			line += markers
 		}
-		if line != "" {
-			lines = append(lines, names[m.Author.ID]+": "+line)
+		if line == "" && len(imageParts) == 0 {
+			continue
 		}
+		if line != "" {
+			parts = append(parts, llm.Part{Kind: llm.PartText, Text: names[m.Author.ID] + ": " + line})
+		} else {
+			parts = append(parts, llm.Part{Kind: llm.PartText, Text: names[m.Author.ID] + ":"})
+		}
+		parts = append(parts, imageParts...)
 	}
-	return lines, imageURLs
+	return parts
 }
 
 // displayName resolves a user's display name the way Discord shows it:
@@ -414,17 +473,4 @@ func messageAddressesBot(m *discordgo.Message, botID string, byID map[string]*di
 		}
 	}
 	return false
-}
-
-func collectImageURIs(ctx context.Context, imageClient images.ImageClient, urls []string) []string {
-	var dataURIs []string
-	for _, u := range urls {
-		duri, err := imageClient.ImageToDataURI(ctx, u)
-		if err != nil {
-			logger.FromContext(ctx).Warn("skipping unreadable transcript image", "url", u, "error", err)
-			continue
-		}
-		dataURIs = append(dataURIs, duri)
-	}
-	return dataURIs
 }

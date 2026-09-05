@@ -211,8 +211,8 @@ func TestHandleMessageCreate_VisionAttachmentForwarded(t *testing.T) {
 		t.Fatal("expected the image client to be called")
 	}
 	last := captured[len(captured)-1]
-	if len(last.Images) != 1 || last.Images[0] != "data:image/jpeg;base64,abc" {
-		t.Errorf("expected the attachment data URI on the current message, got %v", last.Images)
+	if uris := last.ImageURIs(); len(uris) != 1 || uris[0] != "data:image/jpeg;base64,abc" {
+		t.Errorf("expected the attachment data URI on the current message, got %v", uris)
 	}
 }
 
@@ -230,6 +230,9 @@ func TestHandleMessageCreate_ImageNotesStrippedAndPersisted(t *testing.T) {
 	})
 	sm.SetActiveCharacter(ctx, guildID, charID)
 	c.Config.LLM.Vision = true
+
+	auditDir := t.TempDir()
+	c.Audit = audit.NewAuditLogger(auditDir, true)
 
 	c.ImageClient = &mockImageClient{
 		ImageToDataURIFn: func(ctx context.Context, url string) (string, error) {
@@ -275,9 +278,9 @@ func TestHandleMessageCreate_ImageNotesStrippedAndPersisted(t *testing.T) {
 	for _, msg := range history {
 		switch msg.Role {
 		case "user":
-			userRow = msg.Content
+			userRow = msg.Text()
 		case "assistant":
-			assistantRow = msg.Content
+			assistantRow = msg.Text()
 		}
 	}
 	if assistantRow != "Nice shot!" {
@@ -285,6 +288,22 @@ func TestHandleMessageCreate_ImageNotesStrippedAndPersisted(t *testing.T) {
 	}
 	if !strings.Contains(userRow, "[Image: a golden retriever lying on a beach]") {
 		t.Errorf("expected the image note attached to the user row, got %q", userRow)
+	}
+
+	// The audit log shows the raw notes and that the turn carried an image.
+	var logged bool
+	for _, f := range mustReadDir(t, auditDir) {
+		data, err := os.ReadFile(filepath.Join(auditDir, f.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(data), "<image_note>a golden retriever lying on a beach</image_note>") &&
+			strings.Contains(string(data), "[1 image(s) attached]") {
+			logged = true
+		}
+	}
+	if !logged {
+		t.Error("expected the audit prompt to note the attached image and the response to keep the raw note")
 	}
 }
 
@@ -408,8 +427,8 @@ func TestHandleMessageCreate_FileAttachmentMarkerInPrompt(t *testing.T) {
 	c.Handle(s, m)
 
 	last := captured[len(captured)-1]
-	if last.Content != "user1: take a look [File: report.pdf]" {
-		t.Errorf("expected the non-image file marker on the user prompt, got %q", last.Content)
+	if last.Text() != "user1: take a look [File: report.pdf]" {
+		t.Errorf("expected the non-image file marker on the user prompt, got %q", last.Text())
 	}
 }
 
@@ -466,8 +485,8 @@ func TestHandleMessageCreate_VisionDisabledIgnoresAttachments(t *testing.T) {
 		t.Error("image client must not be called when vision is disabled")
 	}
 	last := captured[len(captured)-1]
-	if len(last.Images) != 0 {
-		t.Errorf("expected no images forwarded, got %v", last.Images)
+	if uris := last.ImageURIs(); len(uris) != 0 {
+		t.Errorf("expected no images forwarded, got %v", uris)
 	}
 }
 
@@ -511,7 +530,7 @@ func TestHandleMessageCreate_MemberNickname(t *testing.T) {
 
 	found := false
 	for _, msg := range capturedMessages {
-		if msg.Content == "CoolNick: Hello!" {
+		if msg.Text() == "CoolNick: Hello!" {
 			found = true
 			break
 		}
@@ -572,7 +591,7 @@ func TestHandleMessageCreate_Success(t *testing.T) {
 		t.Fatalf("Expected 2 prompt messages (system + current), got %d", len(capturedMessages))
 	}
 	last := capturedMessages[len(capturedMessages)-1]
-	if last.Role != "user" || !strings.Contains(last.Content, "Hello!") {
+	if last.Role != llm.RoleUser || !strings.Contains(last.Text(), "Hello!") {
 		t.Errorf("Expected prompt to end with current user message, got %v", last)
 	}
 }
@@ -616,7 +635,7 @@ func TestHandleMessageCreate_SystemPromptSubstitution(t *testing.T) {
 
 	found := false
 	for _, msg := range capturedMessages {
-		if msg.Role == "system" && msg.Content == "You are the character named TestChar.\n\nA test character is a helpful bot." {
+		if msg.Role == llm.RoleSystem && msg.Text() == "You are the character named TestChar.\n\nA test character is a helpful bot." {
 			found = true
 			break
 		}
@@ -694,7 +713,7 @@ func TestProcessChat_Error(t *testing.T) {
 		ChannelID: m.ChannelID,
 		ReplyRef:  &discordgo.MessageReference{MessageID: m.ID},
 		Route:     identityRoute,
-	}, "", "char1", "prompt", []llm.Message{}, "req1", audit.KindChat)
+	}, "", "char1", []llm.Message{}, "req1", audit.KindChat)
 
 	if err == nil {
 		t.Error("Expected error, got nil")
@@ -780,7 +799,7 @@ func TestHandleMessageCreate_SerializesSameConversation(t *testing.T) {
 
 	foundFirstReply := false
 	for _, msg := range secondPrompt {
-		if msg.Role == "assistant" && msg.Content == "Reply one" {
+		if msg.Role == llm.RoleAssistant && msg.Text() == "Reply one" {
 			foundFirstReply = true
 		}
 	}
@@ -798,13 +817,13 @@ func TestHandleMessageCreate_SerializesSameConversation(t *testing.T) {
 	// The whole turn is serialized, so history is in strict conversation
 	// order: the second user message is stored only after the first reply.
 	want := []string{"First!", "Reply one", "Second!", "Reply two"}
-	wantRoles := []string{"user", "assistant", "user", "assistant"}
+	wantRoles := []llm.Role{llm.RoleUser, llm.RoleAssistant, llm.RoleUser, llm.RoleAssistant}
 	for i, msg := range history {
 		if msg.Role != wantRoles[i] {
 			t.Errorf("row %d: expected role %q, got %q", i, wantRoles[i], msg.Role)
 		}
-		if !strings.Contains(msg.Content, want[i]) {
-			t.Errorf("row %d: expected content containing %q, got %q", i, want[i], msg.Content)
+		if !strings.Contains(msg.Text(), want[i]) {
+			t.Errorf("row %d: expected content containing %q, got %q", i, want[i], msg.Text())
 		}
 	}
 }
@@ -912,12 +931,12 @@ func TestCompaction_TriggeredThroughHandler(t *testing.T) {
 	}
 
 	for i := 0; i < 10; i++ {
-		sm.SaveMessage(ctx, guildID, "1", "user", "Msg")
+		sm.SaveMessage(ctx, guildID, "1", llm.RoleUser, "Msg")
 	}
 
 	compactionCalls := 0
 	llmMock.GenerateResponseFn = func(ctx context.Context, messages []llm.Message, model string) (string, string, error) {
-		if len(messages) > 0 && strings.HasPrefix(messages[0].Content, "Summarize the following:") {
+		if len(messages) > 0 && strings.HasPrefix(messages[0].Text(), "Summarize the following:") {
 			compactionCalls++
 			return "SUMMARY_TEXT", "Reasoning", nil
 		}
@@ -1041,11 +1060,17 @@ func TestHandleMessageCreate_AmbientReplyGatePasses(t *testing.T) {
 		t.Fatal("Expected LLM messages to be captured")
 	}
 	last := captured[len(captured)-1]
+	var cue string
+	for _, p := range last.Parts {
+		if p.Kind == llm.PartText {
+			cue += p.Text
+		}
+	}
 	expectedCue := ambientTranscriptHeader + "\n" +
 		"bob: we should go tomorrow\nalice: i think we should go\n" +
 		ambientTranscriptFooter
-	if last.Content != expectedCue {
-		t.Errorf("Expected the reply-mode transcript cue, got %q", last.Content)
+	if cue != expectedCue {
+		t.Errorf("Expected the reply-mode transcript cue, got %q", cue)
 	}
 
 	auditLogged := false
@@ -1239,11 +1264,11 @@ func TestHandleMessageCreate_MentionPlusReplyRunsOneTurn(t *testing.T) {
 		t.Errorf("Expected the mention turn reply, got %q", sentResponse)
 	}
 	last := captured[len(captured)-1]
-	if strings.Contains(last.Content, "Replying to") {
-		t.Errorf("Expected the plain mention prompt, got %q", last.Content)
+	if strings.Contains(last.Text(), "Replying to") {
+		t.Errorf("Expected the plain mention prompt, got %q", last.Text())
 	}
-	if !strings.Contains(last.Content, "alice: i think we should go") {
-		t.Errorf("Expected the mention-stripped content in %q", last.Content)
+	if !strings.Contains(last.Text(), "alice: i think we should go") {
+		t.Errorf("Expected the mention-stripped content in %q", last.Text())
 	}
 }
 
@@ -1339,10 +1364,16 @@ func TestHandleMessageCreate_AmbientReplyPlainMessage(t *testing.T) {
 		t.Fatal("Expected LLM messages to be captured")
 	}
 	last := captured[len(captured)-1]
-	if !strings.HasPrefix(last.Content, ambientTranscriptHeader+"\n") {
-		t.Errorf("Expected the reply-mode transcript cue, got %q", last.Content)
+	var cue string
+	for _, p := range last.Parts {
+		if p.Kind == llm.PartText {
+			cue += p.Text
+		}
 	}
-	if !strings.Contains(last.Content, "alice: i think we should go") {
-		t.Errorf("Expected the transcript line in %q", last.Content)
+	if !strings.HasPrefix(cue, ambientTranscriptHeader+"\n") {
+		t.Errorf("Expected the reply-mode transcript cue, got %q", cue)
+	}
+	if !strings.Contains(cue, "alice: i think we should go") {
+		t.Errorf("Expected the transcript line in %q", cue)
 	}
 }

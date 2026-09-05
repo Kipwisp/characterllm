@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"characterllm/internal/llm"
 	"context"
 	"os"
 	"strings"
@@ -27,7 +28,7 @@ func TestDeleteThreadCmd_ConfirmAndDelete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateThread failed: %v", err)
 	}
-	cmdCtx.Session.SaveMessage(ctx, guildID, first.ThreadID, "user", "doomed")
+	cmdCtx.Session.SaveMessage(ctx, guildID, first.ThreadID, llm.RoleUser, "doomed")
 
 	var capturedEmbed *discordgo.MessageEmbed
 	s.InteractionRespondFn = func(interaction *discordgo.Interaction, response *discordgo.InteractionResponse) error {
@@ -122,7 +123,7 @@ func TestDeleteThreadCmd_LastThreadClears(t *testing.T) {
 	if err := cmdCtx.Session.EnsureDefaultThread(ctx, guildID, "char1"); err != nil {
 		t.Fatalf("EnsureDefaultThread failed: %v", err)
 	}
-	cmdCtx.Session.SaveMessage(ctx, guildID, "1", "user", "legacy")
+	cmdCtx.Session.SaveMessage(ctx, guildID, "1", llm.RoleUser, "legacy")
 
 	var capturedEmbed *discordgo.MessageEmbed
 	s.InteractionRespondFn = func(interaction *discordgo.Interaction, response *discordgo.InteractionResponse) error {

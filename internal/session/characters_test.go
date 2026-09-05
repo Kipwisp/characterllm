@@ -1,6 +1,7 @@
 package session
 
 import (
+	"characterllm/internal/llm"
 	"context"
 	"os"
 	"testing"
@@ -67,7 +68,7 @@ func TestDeleteCharacterCard(t *testing.T) {
 		CharacterID: "char1",
 		DisplayName: "Display Name",
 	})
-	m.SaveMessage(ctx, guildID, "", "user", "hello")
+	m.SaveMessage(ctx, guildID, "", llm.RoleUser, "hello")
 	m.SetActiveCharacter(ctx, guildID, "char1")
 	m.PruneAndSummarize(ctx, guildID, "", "rolling summary", 0)
 

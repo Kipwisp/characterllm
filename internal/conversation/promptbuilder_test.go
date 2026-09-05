@@ -24,9 +24,9 @@ func TestBuild_BelowSoftTargetNotTriggered(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	userTokens := f.llm.EstimateTokens(ctx, []llm.Message{{Role: "user", Content: "current"}})
+	userTokens := f.llm.EstimateTokens(ctx, []llm.Message{llm.TextMessage(llm.RoleUser, "current")})
 	messages, compactionNeeded, err := NewPromptBuilder(f.llm, f.sm, f.cfg, f.ps).
-		Build(ctx, testGuildID, testThread, details, "current", nil, userTokens)
+		Build(ctx, testGuildID, testThread, details, llm.TextMessage(llm.RoleUser, "current"), userTokens)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ func TestBuild_BelowSoftTargetNotTriggered(t *testing.T) {
 	if len(messages) != 12 {
 		t.Fatalf("Expected 12 messages (system + 10 history + current), got %d", len(messages))
 	}
-	if strings.Contains(messages[0].Content, "summary of earlier turns") {
+	if strings.Contains(messages[0].Text(), "summary of earlier turns") {
 		t.Error("Expected no summary pointer in system prompt when no summary exists")
 	}
 }
@@ -57,23 +57,23 @@ func TestBuild_ImagesAttachedToCurrentMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	userTokens := f.llm.EstimateTokens(ctx, []llm.Message{{Role: "user", Content: "current"}})
+	userTokens := f.llm.EstimateTokens(ctx, []llm.Message{llm.TextMessage(llm.RoleUser, "current")})
 	images := []string{"data:image/jpeg;base64,abc"}
 	messages, _, err := NewPromptBuilder(f.llm, f.sm, f.cfg, f.ps).
-		Build(ctx, testGuildID, testThread, details, "current", images, userTokens)
+		Build(ctx, testGuildID, testThread, details, llm.Message{Role: llm.RoleUser, Parts: llm.TextWithImages("current", images)}, userTokens)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	last := messages[len(messages)-1]
-	if last.Role != "user" || last.Content != "current" {
+	if last.Role != llm.RoleUser || last.Text() != "current" {
 		t.Fatalf("unexpected final message: %+v", last)
 	}
-	if len(last.Images) != 1 || last.Images[0] != "data:image/jpeg;base64,abc" {
-		t.Errorf("expected images on the current message, got %v", last.Images)
+	if uris := last.ImageURIs(); len(uris) != 1 || uris[0] != "data:image/jpeg;base64,abc" {
+		t.Errorf("expected images on the current message, got %v", uris)
 	}
 	for _, msg := range messages[:len(messages)-1] {
-		if len(msg.Images) != 0 {
+		if len(msg.ImageURIs()) != 0 {
 			t.Errorf("images must not leak onto other messages: %+v", msg)
 		}
 	}
@@ -95,9 +95,9 @@ func TestBuild_SoftTargetTriggersWithoutTruncation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	userTokens := f.llm.EstimateTokens(ctx, []llm.Message{{Role: "user", Content: "current"}})
+	userTokens := f.llm.EstimateTokens(ctx, []llm.Message{llm.TextMessage(llm.RoleUser, "current")})
 	messages, compactionNeeded, err := NewPromptBuilder(f.llm, f.sm, f.cfg, f.ps).
-		Build(ctx, testGuildID, testThread, details, "current", nil, userTokens)
+		Build(ctx, testGuildID, testThread, details, llm.TextMessage(llm.RoleUser, "current"), userTokens)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,8 +109,8 @@ func TestBuild_SoftTargetTriggersWithoutTruncation(t *testing.T) {
 	}
 	for i := 0; i < 10; i++ {
 		want := fmt.Sprintf("Msg %d", i)
-		if messages[1+i].Content != want {
-			t.Errorf("Expected history message %d to be %q, got %q", i, want, messages[1+i].Content)
+		if messages[1+i].Text() != want {
+			t.Errorf("Expected history message %d to be %q, got %q", i, want, messages[1+i].Text())
 		}
 	}
 
@@ -133,9 +133,9 @@ func TestBuild_HardCapTruncatesOldest(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	userTokens := f.llm.EstimateTokens(ctx, []llm.Message{{Role: "user", Content: "current"}})
+	userTokens := f.llm.EstimateTokens(ctx, []llm.Message{llm.TextMessage(llm.RoleUser, "current")})
 	messages, compactionNeeded, err := NewPromptBuilder(f.llm, f.sm, f.cfg, f.ps).
-		Build(ctx, testGuildID, testThread, details, "current", nil, userTokens)
+		Build(ctx, testGuildID, testThread, details, llm.TextMessage(llm.RoleUser, "current"), userTokens)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,8 +146,8 @@ func TestBuild_HardCapTruncatesOldest(t *testing.T) {
 		t.Fatalf("Expected 5 messages (system + 3 history + current), got %d", len(messages))
 	}
 	for i, want := range []string{"Msg 7", "Msg 8", "Msg 9"} {
-		if messages[1+i].Content != want {
-			t.Errorf("Expected history slot %d to be %q, got %q", i, want, messages[1+i].Content)
+		if messages[1+i].Text() != want {
+			t.Errorf("Expected history slot %d to be %q, got %q", i, want, messages[1+i].Text())
 		}
 	}
 
@@ -173,9 +173,9 @@ func TestBuild_SummaryIncludedBeforeHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	userTokens := f.llm.EstimateTokens(ctx, []llm.Message{{Role: "user", Content: "current"}})
+	userTokens := f.llm.EstimateTokens(ctx, []llm.Message{llm.TextMessage(llm.RoleUser, "current")})
 	messages, _, err := NewPromptBuilder(f.llm, f.sm, f.cfg, f.ps).
-		Build(ctx, testGuildID, testThread, details, "current", nil, userTokens)
+		Build(ctx, testGuildID, testThread, details, llm.TextMessage(llm.RoleUser, "current"), userTokens)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,14 +185,14 @@ func TestBuild_SummaryIncludedBeforeHistory(t *testing.T) {
 		t.Fatalf("Expected 9 messages (system + summary + 6 history + current), got %d", len(messages))
 	}
 	wantSummary := "Summary of the earlier part of this conversation:\n" + summary
-	if messages[1].Role != "user" || messages[1].Content != wantSummary {
-		t.Errorf("Expected framed summary as second message, got role=%q content=%q", messages[1].Role, messages[1].Content)
+	if messages[1].Role != llm.RoleUser || messages[1].Text() != wantSummary {
+		t.Errorf("Expected framed summary as second message, got role=%q content=%q", messages[1].Role, messages[1].Text())
 	}
-	if !strings.Contains(messages[0].Content, "summary of earlier turns") {
-		t.Errorf("Expected system prompt to reference the summary, got: %s", messages[0].Content)
+	if !strings.Contains(messages[0].Text(), "summary of earlier turns") {
+		t.Errorf("Expected system prompt to reference the summary, got: %s", messages[0].Text())
 	}
-	if messages[2].Content != "Msg 0" || messages[7].Content != "Msg 5" {
-		t.Errorf("Expected history after the summary, got %q ... %q", messages[2].Content, messages[7].Content)
+	if messages[2].Text() != "Msg 0" || messages[7].Text() != "Msg 5" {
+		t.Errorf("Expected history after the summary, got %q ... %q", messages[2].Text(), messages[7].Text())
 	}
 }
 
@@ -241,8 +241,8 @@ func TestBuild_SystemPromptIdentityLine(t *testing.T) {
 			}, false)
 
 			want := tc.wantIdentity + "\n\n### Identity & Temperament\nBrave. is a helpful bot."
-			if msg.Content != want {
-				t.Errorf("system prompt = %q, want %q", msg.Content, want)
+			if msg.Text() != want {
+				t.Errorf("system prompt = %q, want %q", msg.Text(), want)
 			}
 		})
 	}

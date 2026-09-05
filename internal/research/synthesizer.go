@@ -144,7 +144,7 @@ func NewSynthesizer(sp search.SearchProvider, llm llm.LLMClient, cfg *config.Con
 // AnalyzeInput deconstructs the user's request into a structured analysis result.
 func (s *SynthesizerClient) AnalyzeInput(ctx context.Context, input string) (*AnalysisResult, string, string, error) {
 	prompt := strings.Replace(s.prompts.Analyzer, "{{INPUT}}", input, 1)
-	messages := []llm.Message{{Role: "user", Content: prompt}}
+	messages := []llm.Message{llm.TextMessage(llm.RoleUser, prompt)}
 
 	var lastResponse, lastReasoning string
 	for attempt := 1; attempt <= s.config.LLM.MaxRetries; attempt++ {
@@ -165,8 +165,8 @@ func (s *SynthesizerClient) AnalyzeInput(ctx context.Context, input string) (*An
 			if err := json.Unmarshal([]byte(trimmed), &result); err != nil {
 				if attempt < s.config.LLM.MaxRetries {
 					logger.FromContext(ctx).Warn("analysis JSON malformed, retrying", "error", err)
-					messages = append(messages, llm.Message{Role: "assistant", Content: response})
-					messages = append(messages, llm.Message{Role: "user", Content: fmt.Sprintf("Your response was not valid JSON: %v. Please output only the raw JSON object without markdown blocks.", err)})
+					messages = append(messages, llm.TextMessage(llm.RoleAssistant, response))
+					messages = append(messages, llm.TextMessage(llm.RoleUser, fmt.Sprintf("Your response was not valid JSON: %v. Please output only the raw JSON object without markdown blocks.", err)))
 					continue
 				}
 				return nil, response, reasoning, fmt.Errorf("failed to decode analysis JSON after retry: %w", err)
@@ -220,7 +220,7 @@ func (s *SynthesizerClient) FetchCharacter(ctx context.Context, analysis *Analys
 	prompt := s.renderSynthesisPrompt(analysis, sourceBlock, keptURIs, candidateCount)
 
 	messages := []llm.Message{
-		{Role: "user", Content: prompt, Images: keptURIs},
+		{Role: llm.RoleUser, Parts: llm.TextWithImages(prompt, keptURIs)},
 	}
 
 	for attempt := 1; attempt <= s.config.LLM.MaxRetries; attempt++ {
@@ -252,8 +252,8 @@ func (s *SynthesizerClient) FetchCharacter(ctx context.Context, analysis *Analys
 
 		if attempt < s.config.LLM.MaxRetries {
 			logger.FromContext(ctx).Warn("synthesis response missing required headers, retrying", "attempt", attempt)
-			messages = append(messages, llm.Message{Role: "assistant", Content: profile})
-			messages = append(messages, llm.Message{Role: "user", Content: "Your response is missing the required '### Identity & Temperament' section. Please ensure you follow the Output Structure exactly."})
+			messages = append(messages, llm.TextMessage(llm.RoleAssistant, profile))
+			messages = append(messages, llm.TextMessage(llm.RoleUser, "Your response is missing the required '### Identity & Temperament' section. Please ensure you follow the Output Structure exactly."))
 			continue
 		}
 	}
@@ -348,7 +348,7 @@ func (s *SynthesizerClient) selectSource(ctx context.Context, analysis *Analysis
 	prompt = strings.Replace(prompt, "{{AVATAR_BLOCK}}", s.avatarFilterBlock(len(avatarDataURIs)), 1)
 
 	sel := sourceSelection{prompt: prompt}
-	messages := []llm.Message{{Role: "user", Content: prompt, Images: avatarDataURIs}}
+	messages := []llm.Message{{Role: llm.RoleUser, Parts: llm.TextWithImages(prompt, avatarDataURIs)}}
 	for attempt := 1; attempt <= s.config.LLM.MaxRetries; attempt++ {
 		response, reasoning, err := s.llmClient.GenerateResponse(ctx, messages, s.config.LLM.Model)
 		if err != nil {
@@ -371,12 +371,12 @@ func (s *SynthesizerClient) selectSource(ctx context.Context, analysis *Analysis
 		}
 		if attempt < s.config.LLM.MaxRetries {
 			logger.FromContext(ctx).Warn("source selection reply malformed, retrying", "attempt", attempt)
-			messages = append(messages, llm.Message{Role: "assistant", Content: response})
+			messages = append(messages, llm.TextMessage(llm.RoleAssistant, response))
 			correction := "Your reply was not a valid PICK line. Reply with exactly one line: PICK: n (the candidate number) or PICK: none."
 			if len(avatarDataURIs) > 0 {
 				correction += " Additionally, list the attached photos that depict the character on a second line: AVATARS: n,m,... or AVATARS: none."
 			}
-			messages = append(messages, llm.Message{Role: "user", Content: correction})
+			messages = append(messages, llm.TextMessage(llm.RoleUser, correction))
 			continue
 		}
 	}
@@ -646,8 +646,8 @@ func (s *SynthesizerClient) RewriteSection(ctx context.Context, req SectionRewri
 	userPrompt = strings.Replace(userPrompt, "{{INSTRUCTION_BLOCK}}", instructionBlock, 1)
 	userPrompt = strings.Replace(userPrompt, "{{SECTION_REFERENCE}}", sectionReference, 1)
 	response, reasoning, err := s.llmClient.GenerateResponse(ctx, []llm.Message{
-		{Role: "system", Content: s.prompts.EditSection},
-		{Role: "user", Content: userPrompt},
+		llm.TextMessage(llm.RoleSystem, s.prompts.EditSection),
+		llm.TextMessage(llm.RoleUser, userPrompt),
 	}, s.config.LLM.Model)
 	if err != nil {
 		return nil, fmt.Errorf("section rewrite request failed: %w", err)

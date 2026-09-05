@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"characterllm/internal/llm"
 	"context"
 	"os"
 	"strings"
@@ -112,8 +113,8 @@ func TestDeleteCharacterCmd_Confirm(t *testing.T) {
 		DisplayName: "Miles Morales",
 	})
 	sm.SetActiveCharacter(context.Background(), guildID, "char1")
-	sm.SaveMessage(context.Background(), guildID, "", "user", "hello")
-	sm.SaveMessage(context.Background(), guildID, "", "assistant", "hi")
+	sm.SaveMessage(context.Background(), guildID, "", llm.RoleUser, "hello")
+	sm.SaveMessage(context.Background(), guildID, "", llm.RoleAssistant, "hi")
 
 	deletedImage := false
 	cmdCtx.ImageClient = &mockImageClient{

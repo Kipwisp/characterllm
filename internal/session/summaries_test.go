@@ -1,6 +1,7 @@
 package session
 
 import (
+	"characterllm/internal/llm"
 	"context"
 	"os"
 	"testing"
@@ -21,13 +22,13 @@ func TestPruneAndSummarize(t *testing.T) {
 	}
 
 	msgs := []struct {
-		role    string
+		role    llm.Role
 		content string
 	}{
-		{"user", "one"},
-		{"assistant", "two"},
-		{"user", "three"},
-		{"assistant", "four"},
+		{llm.RoleUser, "one"},
+		{llm.RoleAssistant, "two"},
+		{llm.RoleUser, "three"},
+		{llm.RoleAssistant, "four"},
 		{"user", "five"},
 	}
 	for _, msg := range msgs {
@@ -48,8 +49,8 @@ func TestPruneAndSummarize(t *testing.T) {
 		if len(history) != 3 {
 			t.Fatalf("Expected 3 remaining messages, got %d", len(history))
 		}
-		if history[0].Content != "three" {
-			t.Errorf("Expected first remaining message 'three', got %s", history[0].Content)
+		if history[0].Text() != "three" {
+			t.Errorf("Expected first remaining message 'three', got %s", history[0].Text())
 		}
 
 		count, err := m.GetHistoryCount(ctx, guildID, threadID)
@@ -88,7 +89,7 @@ func TestPruneAndSummarize(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GetHistory failed: %v", err)
 		}
-		if len(history) != 1 || history[0].Content != "five" {
+		if len(history) != 1 || history[0].Text() != "five" {
 			t.Errorf("Expected only 'five' remaining, got %v", history)
 		}
 	})
@@ -142,7 +143,7 @@ func TestPruneAndSummarize_ZeroDeletionsPreservesHistory(t *testing.T) {
 	}
 
 	for _, content := range []string{"one", "two", "three"} {
-		if err := m.SaveMessage(ctx, guildID, "", "user", content); err != nil {
+		if err := m.SaveMessage(ctx, guildID, "", llm.RoleUser, content); err != nil {
 			t.Fatalf("SaveMessage failed: %v", err)
 		}
 	}
@@ -164,7 +165,7 @@ func TestPruneAndSummarize_ZeroDeletionsPreservesHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetHistory failed: %v", err)
 	}
-	if len(history) != 3 || history[0].Content != "one" {
+	if len(history) != 3 || history[0].Text() != "one" {
 		t.Errorf("Expected original history intact, got %v", history)
 	}
 

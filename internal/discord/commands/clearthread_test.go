@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"characterllm/internal/llm"
 	"context"
 	"os"
 	"testing"
@@ -26,12 +27,12 @@ func TestClearThreadCmd_Execute(t *testing.T) {
 
 	cmdCtx.Session.EnsureDefaultThread(ctx, guildID, "char1")
 	// Seed history on both the default thread and a created thread.
-	cmdCtx.Session.SaveMessage(ctx, guildID, "1", "user", "default hello")
+	cmdCtx.Session.SaveMessage(ctx, guildID, "1", llm.RoleUser, "default hello")
 	thread, err := cmdCtx.Session.CreateThread(ctx, guildID, "char1", "Side quest")
 	if err != nil {
 		t.Fatalf("CreateThread failed: %v", err)
 	}
-	cmdCtx.Session.SaveMessage(ctx, guildID, thread.ThreadID, "user", "side hello")
+	cmdCtx.Session.SaveMessage(ctx, guildID, thread.ThreadID, llm.RoleUser, "side hello")
 
 	var content string
 	s.InteractionRespondFn = func(interaction *discordgo.Interaction, response *discordgo.InteractionResponse) error {

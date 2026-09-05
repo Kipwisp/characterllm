@@ -38,11 +38,10 @@ func ImageTokenEstimateFor(maxEdge int) (int, error) {
 	return est, nil
 }
 
-// llamaMessage is the OpenAI JSON form of a single turn in LlamaRequest/LlamaResponse. Its
-// content is either a plain JSON string or an array of content parts (a text
-// part plus one image_url part per attached image).
+// llamaMessage is the OpenAI JSON form of a single turn in LlamaRequest/LlamaResponse.
+// Its content is an array of content parts (text and image_url parts in order).
 type llamaMessage struct {
-	Role      string          `json:"role"`
+	Role      Role            `json:"role"`
 	Content   json.RawMessage `json:"content"`
 	Reasoning string          `json:"reasoning_content,omitempty"`
 }
@@ -62,17 +61,17 @@ func toLlamaMessages(messages []Message) ([]llamaMessage, error) {
 	for _, m := range messages {
 		wm := llamaMessage{Role: m.Role, Reasoning: m.Reasoning}
 
-		var payload any = m.Content
-		if len(m.Images) > 0 {
-			parts := make([]contentPart, 0, len(m.Images)+1)
-			parts = append(parts, contentPart{Type: "text", Text: m.Content})
-			for _, u := range m.Images {
-				parts = append(parts, contentPart{Type: "image_url", ImageURL: &imagePart{URL: u}})
+		parts := make([]contentPart, 0, len(m.Parts))
+		for _, p := range m.Parts {
+			switch p.Kind {
+			case PartImage:
+				parts = append(parts, contentPart{Type: "image_url", ImageURL: &imagePart{URL: p.ImageURL}})
+			default:
+				parts = append(parts, contentPart{Type: "text", Text: p.Text})
 			}
-			payload = parts
 		}
 
-		data, err := json.Marshal(payload)
+		data, err := json.Marshal(parts)
 		if err != nil {
 			return nil, err
 		}
@@ -192,7 +191,7 @@ func (c *OpenAIClient) EstimateTokens(ctx context.Context, messages []Message) i
 	// Fallback: Heuristic approximation (roughly 4 characters per token)
 	var totalChars int
 	for _, msg := range messages {
-		totalChars += len(msg.Content)
+		totalChars += len(msg.Text())
 		if msg.Reasoning != "" {
 			totalChars += len(msg.Reasoning)
 		}
@@ -210,14 +209,17 @@ func (c *OpenAIClient) imageTokenEstimate() int {
 func countImages(messages []Message) int {
 	total := 0
 	for _, msg := range messages {
-		total += len(msg.Images)
+		for _, p := range msg.Parts {
+			if p.Kind == PartImage {
+				total++
+			}
+		}
 	}
 	return total
 }
 
 func (c *OpenAIClient) verifyTokenizationSupport(ctx context.Context) bool {
-	messages := []Message{{Role: "user", Content: "test"}}
-	tokens, err := c.fetchRemoteTokens(ctx, messages)
+	tokens, err := c.fetchRemoteTokens(ctx, []Message{TextMessage(RoleUser, "test")})
 	return err == nil && tokens > 0
 }
 

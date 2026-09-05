@@ -1,6 +1,7 @@
 package session
 
 import (
+	"characterllm/internal/llm"
 	"context"
 	"os"
 	"testing"
@@ -24,12 +25,12 @@ func TestChatHistoryOperations(t *testing.T) {
 
 	t.Run("Save and Get History", func(t *testing.T) {
 		msgs := []struct {
-			role    string
+			role    llm.Role
 			content string
 		}{
-			{"user", "Hi"},
-			{"assistant", "Hello!"},
-			{"user", "How are you?"},
+			{llm.RoleUser, "Hi"},
+			{llm.RoleAssistant, "Hello!"},
+			{llm.RoleUser, "How are you?"},
 		}
 
 		for _, msg := range msgs {
@@ -46,8 +47,8 @@ func TestChatHistoryOperations(t *testing.T) {
 		if len(history) != 3 {
 			t.Errorf("Expected 3 messages, got %d", len(history))
 		}
-		if history[0].Content != "Hi" {
-			t.Errorf("Expected first message 'Hi', got %s", history[0].Content)
+		if history[0].Text() != "Hi" {
+			t.Errorf("Expected first message 'Hi', got %s", history[0].Text())
 		}
 	})
 
@@ -69,8 +70,8 @@ func TestChatHistoryOperations(t *testing.T) {
 		if len(oldest) != 2 {
 			t.Errorf("Expected 2 oldest messages, got %d", len(oldest))
 		}
-		if oldest[0].Content != "Hi" {
-			t.Errorf("Expected first oldest message 'Hi', got %s", oldest[0].Content)
+		if oldest[0].Text() != "Hi" {
+			t.Errorf("Expected first oldest message 'Hi', got %s", oldest[0].Text())
 		}
 	})
 
@@ -89,7 +90,7 @@ func TestChatHistoryOperations(t *testing.T) {
 	})
 }
 
-func TestAppendToLastUserMessage(t *testing.T) {
+func TestResolveImageNotes(t *testing.T) {
 	m, tmpFile := setupManager(t)
 	defer os.Remove(tmpFile)
 	defer m.Close()
@@ -100,32 +101,74 @@ func TestAppendToLastUserMessage(t *testing.T) {
 	m.SaveCharacterCard(ctx, guildID, &CharacterCard{CharacterID: charID, DisplayName: "Test"})
 	m.SetActiveCharacter(ctx, guildID, charID)
 
-	t.Run("appends to most recent user message only", func(t *testing.T) {
-		m.SaveMessage(ctx, guildID, "", "user", "first")
-		m.SaveMessage(ctx, guildID, "", "assistant", "reply")
-		m.SaveMessage(ctx, guildID, "", "user", "second")
-
-		if err := m.AppendToLastUserMessage(ctx, guildID, "", "\n[Image: a dog]"); err != nil {
-			t.Fatalf("AppendToLastUserMessage failed: %v", err)
-		}
-
-		history, err := m.GetHistory(ctx, guildID, "", 10, 0)
+	lastUserContent := func(t *testing.T, threadID string) string {
+		t.Helper()
+		history, err := m.GetHistory(ctx, guildID, threadID, 10, 0)
 		if err != nil {
 			t.Fatalf("GetHistory failed: %v", err)
 		}
-		want := []string{"first", "reply", "second\n[Image: a dog]"}
-		if len(history) != len(want) {
-			t.Fatalf("expected %d rows, got %d", len(want), len(history))
+		if len(history) == 0 {
+			t.Fatal("expected a user row")
 		}
-		for i, w := range want {
-			if history[i].Content != w {
-				t.Errorf("row %d: expected %q, got %q", i, w, history[i].Content)
-			}
+		return history[len(history)-1].Text()
+	}
+
+	t.Run("resolves markers to notes in order", func(t *testing.T) {
+		m.SaveMessage(ctx, guildID, "t1", llm.RoleUser, "header\nAlice: look\n"+ImageMarker(1)+"\nBob: hi\n"+ImageMarker(2)+"\nfooter")
+		if _, err := m.ResolveImageNotes(ctx, guildID, "t1", []string{"a dog", "a harbor"}); err != nil {
+			t.Fatalf("ResolveImageNotes failed: %v", err)
+		}
+		want := "header\nAlice: look\n[Image: a dog]\nBob: hi\n[Image: a harbor]\nfooter"
+		if got := lastUserContent(t, "t1"); got != want {
+			t.Errorf("unexpected row:\n%s\nwant:\n%s", got, want)
+		}
+	})
+
+	t.Run("keeps a placeholder for markers without a note", func(t *testing.T) {
+		m.SaveMessage(ctx, guildID, "t2", llm.RoleUser, "header\nAlice: look\n"+ImageMarker(1)+"\nBob: hi\n"+ImageMarker(2)+"\nfooter")
+		if _, err := m.ResolveImageNotes(ctx, guildID, "t2", []string{"a dog"}); err != nil {
+			t.Fatalf("ResolveImageNotes failed: %v", err)
+		}
+		want := "header\nAlice: look\n[Image: a dog]\nBob: hi\n[Image: no description]\nfooter"
+		if got := lastUserContent(t, "t2"); got != want {
+			t.Errorf("unexpected row:\n%s\nwant:\n%s", got, want)
+		}
+	})
+
+	t.Run("keeps placeholders when the model returned none", func(t *testing.T) {
+		m.SaveMessage(ctx, guildID, "t3", llm.RoleUser, "header\nAlice: look\n"+ImageMarker(1)+"\nfooter")
+		if _, err := m.ResolveImageNotes(ctx, guildID, "t3", nil); err != nil {
+			t.Fatalf("ResolveImageNotes failed: %v", err)
+		}
+		want := "header\nAlice: look\n[Image: no description]\nfooter"
+		if got := lastUserContent(t, "t3"); got != want {
+			t.Errorf("unexpected row:\n%s\nwant:\n%s", got, want)
+		}
+	})
+
+	t.Run("appends surplus notes at the end", func(t *testing.T) {
+		m.SaveMessage(ctx, guildID, "t4", llm.RoleUser, "header\nAlice: look\n"+ImageMarker(1)+"\nfooter")
+		if _, err := m.ResolveImageNotes(ctx, guildID, "t4", []string{"a dog", "a harbor"}); err != nil {
+			t.Fatalf("ResolveImageNotes failed: %v", err)
+		}
+		want := "header\nAlice: look\n[Image: a dog]\nfooter\n[Image: a harbor]"
+		if got := lastUserContent(t, "t4"); got != want {
+			t.Errorf("unexpected row:\n%s\nwant:\n%s", got, want)
+		}
+	})
+
+	t.Run("no-op without markers", func(t *testing.T) {
+		m.SaveMessage(ctx, guildID, "t5", llm.RoleUser, "plain transcript")
+		if _, err := m.ResolveImageNotes(ctx, guildID, "t5", []string{"a dog"}); err != nil {
+			t.Fatalf("ResolveImageNotes failed: %v", err)
+		}
+		if got := lastUserContent(t, "t5"); got != "plain transcript" {
+			t.Errorf("expected the row unchanged, got %q", got)
 		}
 	})
 
 	t.Run("errors when no user message exists", func(t *testing.T) {
-		if err := m.AppendToLastUserMessage(ctx, "empty-guild", "", "\n[Image: x]"); err == nil {
+		if _, err := m.ResolveImageNotes(ctx, "empty-guild", "", []string{"a dog"}); err == nil {
 			t.Error("expected an error when no user message exists")
 		}
 	})
@@ -149,10 +192,10 @@ func TestGetLastCharacterMessage(t *testing.T) {
 	})
 
 	t.Run("scoped to the named character and thread", func(t *testing.T) {
-		m.SaveMessage(ctx, guildID, "1", "user", "a1")
-		m.SaveMessage(ctx, guildID, "1", "assistant", "a2")
-		m.SaveMessage(ctx, guildID, "2", "user", "b1")
-		m.SaveMessage(ctx, guildID, "2", "assistant", "b2")
+		m.SaveMessage(ctx, guildID, "1", llm.RoleUser, "a1")
+		m.SaveMessage(ctx, guildID, "1", llm.RoleAssistant, "a2")
+		m.SaveMessage(ctx, guildID, "2", llm.RoleUser, "b1")
+		m.SaveMessage(ctx, guildID, "2", llm.RoleAssistant, "b2")
 
 		got, ok := m.GetLastCharacterMessage(ctx, guildID, charID, "1")
 		if !ok || got != "a2" {
@@ -163,14 +206,14 @@ func TestGetLastCharacterMessage(t *testing.T) {
 			t.Errorf("expected last character message %q from thread 2, got %q (ok=%v)", "b2", got, ok)
 		}
 
-		m.SaveMessage(ctx, guildID, "1", "assistant", "a3")
+		m.SaveMessage(ctx, guildID, "1", llm.RoleAssistant, "a3")
 		got, ok = m.GetLastCharacterMessage(ctx, guildID, charID, "1")
 		if !ok || got != "a3" {
 			t.Errorf("expected last character message %q from thread 1, got %q (ok=%v)", "a3", got, ok)
 		}
 
 		m.SetActiveCharacter(ctx, guildID, "char2")
-		m.SaveMessage(ctx, guildID, "3", "assistant", "c1")
+		m.SaveMessage(ctx, guildID, "3", llm.RoleAssistant, "c1")
 
 		// char1's history is unaffected by char2's new thread.
 		got, ok = m.GetLastCharacterMessage(ctx, guildID, charID, "1")
@@ -184,7 +227,7 @@ func TestGetLastCharacterMessage(t *testing.T) {
 	})
 
 	t.Run("skips user messages", func(t *testing.T) {
-		m.SaveMessage(ctx, guildID, "1", "user", "a4")
+		m.SaveMessage(ctx, guildID, "1", llm.RoleUser, "a4")
 		got, ok := m.GetLastCharacterMessage(ctx, guildID, charID, "1")
 		if !ok || got != "a3" {
 			t.Errorf("expected the user's newer message to be skipped, got %q (ok=%v)", got, ok)

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -113,10 +114,10 @@ func TestAmbientTick_TopicMode(t *testing.T) {
 	if err != nil || len(history) != 2 {
 		t.Fatalf("expected 2 history rows, got %d (err %v)", len(history), err)
 	}
-	if history[0].Role != "user" || history[0].Content != ambientTopicCue {
+	if history[0].Role != llm.RoleUser || history[0].Text() != ambientTopicCue {
 		t.Errorf("unexpected user row: %+v", history[0])
 	}
-	if history[1].Role != "assistant" || history[1].Content != "A fresh thought." {
+	if history[1].Role != llm.RoleAssistant || history[1].Text() != "A fresh thought." {
 		t.Errorf("unexpected assistant row: %+v", history[1])
 	}
 
@@ -161,8 +162,8 @@ func TestAmbientTick_ReplyMode(t *testing.T) {
 		t.Fatalf("expected 2 history rows, got %d (err %v)", len(history), err)
 	}
 	want := "Messages in this channel just now:\nAlice: did anyone finish the race?\nBob: barely\nReply to this conversation in character."
-	if history[0].Role != "user" || history[0].Content != want {
-		t.Errorf("unexpected user row:\n%s\nwant:\n%s", history[0].Content, want)
+	if history[0].Role != llm.RoleUser || history[0].Text() != want {
+		t.Errorf("unexpected user row:\n%s\nwant:\n%s", history[0].Text(), want)
 	}
 }
 
@@ -191,8 +192,8 @@ func TestAmbientTick_EmptyTranscriptFallsBackToTopic(t *testing.T) {
 	if err != nil || len(history) != 2 {
 		t.Fatalf("expected 2 history rows, got %d (err %v)", len(history), err)
 	}
-	if history[0].Content != ambientTopicCue {
-		t.Errorf("expected topic cue fallback, got %q", history[0].Content)
+	if history[0].Text() != ambientTopicCue {
+		t.Errorf("expected topic cue fallback, got %q", history[0].Text())
 	}
 }
 
@@ -239,8 +240,8 @@ func TestAmbientTick_TranscriptExcludesAddressedMessages(t *testing.T) {
 		t.Fatalf("expected 2 history rows, got %d (err %v)", len(history), err)
 	}
 	want := "Messages in this channel just now:\nAlice: the weather is nice\nReply to this conversation in character."
-	if history[0].Content != want {
-		t.Errorf("unexpected user row:\n%s\nwant:\n%s", history[0].Content, want)
+	if history[0].Text() != want {
+		t.Errorf("unexpected user row:\n%s\nwant:\n%s", history[0].Text(), want)
 	}
 }
 
@@ -276,8 +277,8 @@ func TestAmbientTick_AllAddressedTranscriptFallsBackToTopic(t *testing.T) {
 	if err != nil || len(history) != 2 {
 		t.Fatalf("expected 2 history rows, got %d (err %v)", len(history), err)
 	}
-	if history[0].Content != ambientTopicCue {
-		t.Errorf("expected topic cue fallback, got %q", history[0].Content)
+	if history[0].Text() != ambientTopicCue {
+		t.Errorf("expected topic cue fallback, got %q", history[0].Text())
 	}
 }
 
@@ -376,8 +377,129 @@ func TestAmbientTick_TranscriptImages(t *testing.T) {
 	a.tick(context.Background(), guildID, []string{"chan1"})
 
 	current := lastPrompt[len(lastPrompt)-1]
-	if len(current.Images) != 2 || current.Images[0] != "data:https://x/1.png" || current.Images[1] != "data:https://x/2.jpg" {
-		t.Errorf("unexpected images in prompt: %v", current.Images)
+	wantParts := []llm.Part{
+		{Kind: llm.PartText, Text: ambientTranscriptHeader + "\nAlice: look at this"},
+		{Kind: llm.PartImage, ImageURL: "data:https://x/1.png"},
+		{Kind: llm.PartText, Text: "\nBob: and this"},
+		{Kind: llm.PartImage, ImageURL: "data:https://x/2.jpg"},
+		{Kind: llm.PartText, Text: "\nCara: one more\n" + ambientTranscriptFooter},
+	}
+	if len(current.Parts) != len(wantParts) {
+		t.Fatalf("expected %d interleaved parts, got %d: %+v", len(wantParts), len(current.Parts), current.Parts)
+	}
+	for i, p := range wantParts {
+		if current.Parts[i] != p {
+			t.Errorf("part %d: expected %+v, got %+v", i, p, current.Parts[i])
+		}
+	}
+	// Cara's third image exceeds LLM.MaxImages and must be dropped.
+	var cue string
+	for _, p := range current.Parts {
+		if p.Kind == llm.PartText {
+			cue += p.Text
+		}
+	}
+	if cue != ambientTranscriptHeader+"\nAlice: look at this\nBob: and this\nCara: one more\n"+ambientTranscriptFooter {
+		t.Errorf("unexpected transcript cue: %q", cue)
+	}
+
+	// The model returned no notes, so the stored placeholders resolve to
+	// [Image: no description] lines, keeping the images' existence in the row.
+	history, err := sm.GetHistory(context.Background(), guildID, "1", 10, 0)
+	if err != nil || len(history) != 2 {
+		t.Fatalf("expected 2 history rows, got %d (err %v)", len(history), err)
+	}
+	want := ambientTranscriptHeader +
+		"\nAlice: look at this\n[Image: no description]" +
+		"\nBob: and this\n[Image: no description]" +
+		"\nCara: one more\n" + ambientTranscriptFooter
+	if got := history[0].Text(); got != want {
+		t.Errorf("unexpected stored user row:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestAmbientTick_ImageNotesResolvedUnderSpeaker(t *testing.T) {
+	a, s, llmMock, sm, auditDir, rolls := setupAmbient(t, config.AmbientConfig{ReplyCount: 5})
+	a.Config.LLM.Vision = true
+	a.Config.LLM.MaxImages = 2
+	guildID := "guild1"
+	setActiveCharacter(t, sm, guildID)
+	rolls.values = []float64{0.9} // reply mode
+
+	s.ChannelMessagesFn = func(channelID string, limit int, beforeID, afterID, aroundID string) ([]*discordgo.Message, error) {
+		return []*discordgo.Message{
+			{
+				Content: "one more",
+				Author:  &discordgo.User{ID: "c1", Username: "Cara"},
+				Attachments: []*discordgo.MessageAttachment{
+					{URL: "https://x/3.png", ContentType: "image/png"},
+				},
+			},
+			{
+				Content: "and this",
+				Author:  &discordgo.User{ID: "b1", Username: "Bob"},
+				Attachments: []*discordgo.MessageAttachment{
+					{URL: "https://x/2.jpg", ContentType: "image/jpeg"},
+				},
+			},
+			{
+				Content: "look at this",
+				Author:  &discordgo.User{ID: "a1", Username: "Alice"},
+				Attachments: []*discordgo.MessageAttachment{
+					{URL: "https://x/1.png", ContentType: "image/png"},
+				},
+			},
+		}, nil
+	}
+	a.ImageClient = &mockImageClient{
+		ImageToDataURIFn: func(ctx context.Context, url string) (string, error) {
+			return "data:" + url, nil
+		},
+	}
+	llmMock.GenerateResponseFn = func(ctx context.Context, messages []llm.Message, model string) (string, string, error) {
+		return "<image_note>a golden retriever on a beach</image_note>\n<image_note>a harbor at dusk</image_note>\nNice photos.", "", nil
+	}
+	s.ChannelMessageSendFn = func(channelID, content string) (*discordgo.Message, error) {
+		return nil, nil
+	}
+
+	a.tick(context.Background(), guildID, []string{"chan1"})
+
+	history, err := sm.GetHistory(context.Background(), guildID, "1", 10, 0)
+	if err != nil || len(history) != 2 {
+		t.Fatalf("expected 2 history rows, got %d (err %v)", len(history), err)
+	}
+	// Each note lands under the line whose image it describes; Cara's image
+	// was dropped by MaxImages, so her line stays clean.
+	want := ambientTranscriptHeader +
+		"\nAlice: look at this\n[Image: a golden retriever on a beach]" +
+		"\nBob: and this\n[Image: a harbor at dusk]" +
+		"\nCara: one more\n" + ambientTranscriptFooter
+	if got := history[0].Text(); got != want {
+		t.Errorf("unexpected stored user row:\n%s\nwant:\n%s", got, want)
+	}
+	if got := history[1].Text(); got != "Nice photos." {
+		t.Errorf("expected the notes stripped from the stored reply, got %q", got)
+	}
+
+	// The audit log shows the user input in its persisted form (notes
+	// resolved under their lines), the image count, and the raw notes.
+	var logged bool
+	for _, f := range mustReadDir(t, auditDir) {
+		data, err := os.ReadFile(filepath.Join(auditDir, f.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := string(data)
+		if strings.Contains(s, "[Image: a golden retriever on a beach]") &&
+			strings.Contains(s, "[Image: a harbor at dusk]") &&
+			strings.Contains(s, "[2 image(s) attached]") &&
+			strings.Contains(s, "<image_note>a harbor at dusk</image_note>") {
+			logged = true
+		}
+	}
+	if !logged {
+		t.Error("expected the audit prompt to carry the resolved image notes, the count, and the raw notes")
 	}
 }
 
@@ -416,8 +538,14 @@ func TestAmbientTick_TranscriptImagesVisionDisabled(t *testing.T) {
 
 	a.tick(context.Background(), guildID, []string{"chan1"})
 
-	if images := lastPrompt[len(lastPrompt)-1].Images; len(images) != 0 {
-		t.Errorf("expected no images with vision disabled, got %v", images)
+	last := lastPrompt[len(lastPrompt)-1]
+	if uris := last.ImageURIs(); len(uris) != 0 {
+		t.Errorf("expected no images with vision disabled, got %v", uris)
+	}
+	for _, p := range last.Parts {
+		if p.Kind == llm.PartImage {
+			t.Errorf("expected no image parts with vision disabled, got %+v", p)
+		}
 	}
 }
 
@@ -584,11 +712,11 @@ func TestAmbientTick_TopicModeMultiChannel(t *testing.T) {
 	}
 	wantCue := ambientTopicCue + "\n" + ambientChannelListLabel + "\n1. #alpha\n2. #lobby\n" +
 		ambientChannelPickInstruction
-	if history[0].Role != "user" || history[0].Content != wantCue {
-		t.Errorf("unexpected user row:\n%s\nwant:\n%s", history[0].Content, wantCue)
+	if history[0].Role != llm.RoleUser || history[0].Text() != wantCue {
+		t.Errorf("unexpected user row:\n%s\nwant:\n%s", history[0].Text(), wantCue)
 	}
-	if history[1].Role != "assistant" || history[1].Content != "Let us start with something." {
-		t.Errorf("expected the stored assistant row stripped, got %q", history[1].Content)
+	if history[1].Role != llm.RoleAssistant || history[1].Text() != "Let us start with something." {
+		t.Errorf("expected the stored assistant row stripped, got %q", history[1].Text())
 	}
 }
 
@@ -670,7 +798,7 @@ func TestAmbientTick_TopicModeMultiChannelNamesUnresolvable(t *testing.T) {
 		return nil, nil
 	}
 	llmMock.GenerateResponseFn = func(ctx context.Context, messages []llm.Message, model string) (string, string, error) {
-		cueSent = messages[len(messages)-1].Content
+		cueSent = messages[len(messages)-1].Text()
 		return "CHANNEL: 2\nvia raw id", "", nil
 	}
 
@@ -740,7 +868,7 @@ func TestAmbientTick_TopicModeSingleChannelNoList(t *testing.T) {
 	if sentChannel != "chan1" {
 		t.Errorf("expected the send in chan1, got %q", sentChannel)
 	}
-	if got := lastPrompt[len(lastPrompt)-1].Content; got != ambientTopicCue {
+	if got := lastPrompt[len(lastPrompt)-1].Text(); got != ambientTopicCue {
 		t.Errorf("expected the plain topic cue, got %q", got)
 	}
 }
@@ -787,40 +915,47 @@ func TestExtractTranscript_FileAttachments(t *testing.T) {
 		}
 	}
 
-	lines, imageURLs := extractTranscript(newestFirst(), "bot1", cfg, names)
-	if len(lines) != 4 {
-		t.Fatalf("expected 4 lines, got %d: %v", len(lines), lines)
+	got := extractTranscript(newestFirst(), "bot1", cfg, names)
+	want := []llm.Part{
+		{Kind: llm.PartText, Text: "Alice: check this out [File: report.pdf]"},
+		{Kind: llm.PartText, Text: "Bob: [File: archive.zip]"},
+		{Kind: llm.PartText, Text: "Cara: a photo"},
+		{Kind: llm.PartImage, ImageURL: "https://img/1.png"},
+		{Kind: llm.PartText, Text: "Dan: plain text"},
 	}
-	if lines[0] != "Alice: check this out [File: report.pdf]" {
-		t.Errorf("unexpected first line %q", lines[0])
+	if len(got) != len(want) {
+		t.Fatalf("expected %d parts, got %d: %+v", len(want), len(got), got)
 	}
-	if lines[1] != "Bob: [File: archive.zip]" {
-		t.Errorf("expected the file-only message to carry a marker line, got %q", lines[1])
-	}
-	if lines[2] != "Cara: a photo" {
-		t.Errorf("expected the image message to keep its text without a file marker, got %q", lines[2])
-	}
-	if lines[3] != "Dan: plain text" {
-		t.Errorf("unexpected fourth line %q", lines[3])
-	}
-	if len(imageURLs) != 1 || imageURLs[0] != "https://img/1.png" {
-		t.Errorf("expected the single image URL collected, got %v", imageURLs)
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("part %d: expected %+v, got %+v", i, want[i], got[i])
+		}
 	}
 
 	// With vision disabled the image is dropped and the file markers remain.
-	lines, imageURLs = extractTranscript(newestFirst(), "bot1", &config.Config{LLM: config.LLMConfig{MaxImages: 2}}, names)
-	if len(lines) != 4 || lines[2] != "Cara: a photo" {
-		t.Errorf("vision disabled: expected the text lines unchanged, got %v", lines)
+	got = extractTranscript(newestFirst(), "bot1", &config.Config{LLM: config.LLMConfig{MaxImages: 2}}, names)
+	for _, p := range got {
+		if p.Kind == llm.PartImage {
+			t.Errorf("vision disabled: expected no image parts, got %+v", p)
+		}
 	}
-	if len(imageURLs) != 0 {
-		t.Errorf("vision disabled: expected no image URLs, got %v", imageURLs)
+	if len(got) != 4 || got[2].Text != "Cara: a photo" {
+		t.Errorf("vision disabled: expected the text parts unchanged, got %+v", got)
 	}
 
 	fileOnly := []*discordgo.Message{{ID: "9", Author: &discordgo.User{ID: "a2", Username: "Bob"},
 		Attachments: []*discordgo.MessageAttachment{{Filename: "x.tar.gz", ContentType: "application/gzip"}}}}
-	lines, _ = extractTranscript(fileOnly, "bot1", cfg, names)
-	if len(lines) != 1 || lines[0] != "Bob: [File: x.tar.gz]" {
-		t.Errorf("expected the file-only message to yield a marker line, got %v", lines)
+	got = extractTranscript(fileOnly, "bot1", cfg, names)
+	if len(got) != 1 || got[0].Text != "Bob: [File: x.tar.gz]" {
+		t.Errorf("expected the file-only message to yield a marker line, got %+v", got)
+	}
+
+	// An image-only message keeps its speaker attribution.
+	imageOnly := []*discordgo.Message{{ID: "10", Author: &discordgo.User{ID: "a1", Username: "Alice"},
+		Attachments: []*discordgo.MessageAttachment{{URL: "https://img/2.png", ContentType: "image/png"}}}}
+	got = extractTranscript(imageOnly, "bot1", cfg, names)
+	if len(got) != 2 || got[0] != (llm.Part{Kind: llm.PartText, Text: "Alice:"}) || got[1] != (llm.Part{Kind: llm.PartImage, ImageURL: "https://img/2.png"}) {
+		t.Errorf("expected a bare name part followed by the image, got %+v", got)
 	}
 }
 

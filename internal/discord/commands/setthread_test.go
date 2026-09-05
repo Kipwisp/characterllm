@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"characterllm/internal/llm"
 	"context"
 	"os"
 	"strings"
@@ -49,9 +50,9 @@ func TestSetThreadCmd_Execute(t *testing.T) {
 	})
 
 	t.Run("switch appends the thread's last bot message", func(t *testing.T) {
-		cmdCtx.Session.SaveMessage(ctx, guildID, created.ThreadID, "user", "what was I thinking?")
-		cmdCtx.Session.SaveMessage(ctx, guildID, created.ThreadID, "assistant", "You were plotting.")
-		cmdCtx.Session.SaveMessage(ctx, guildID, created.ThreadID, "user", "later")
+		cmdCtx.Session.SaveMessage(ctx, guildID, created.ThreadID, llm.RoleUser, "what was I thinking?")
+		cmdCtx.Session.SaveMessage(ctx, guildID, created.ThreadID, llm.RoleAssistant, "You were plotting.")
+		cmdCtx.Session.SaveMessage(ctx, guildID, created.ThreadID, llm.RoleUser, "later")
 		i := newThreadOptionInteraction("setthread", stringOption("thread", "1"))
 		if err := cmd.Execute(ctx, s, i); err != nil {
 			t.Fatalf("Execute failed: %v", err)

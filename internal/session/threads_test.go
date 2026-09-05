@@ -1,6 +1,7 @@
 package session
 
 import (
+	"characterllm/internal/llm"
 	"context"
 	"errors"
 	"os"
@@ -190,8 +191,8 @@ func TestDeleteThread(t *testing.T) {
 	}
 
 	t.Run("deleting a non-last thread removes it and its history", func(t *testing.T) {
-		m.SaveMessage(ctx, guildID, second.ThreadID, "user", "hello")
-		m.SaveMessage(ctx, guildID, third.ThreadID, "user", "stay")
+		m.SaveMessage(ctx, guildID, second.ThreadID, llm.RoleUser, "hello")
+		m.SaveMessage(ctx, guildID, third.ThreadID, llm.RoleUser, "stay")
 		cleared, err := m.DeleteThread(ctx, guildID, charID, second.ThreadID)
 		if err != nil || cleared {
 			t.Fatalf("expected a plain delete, got cleared=%v (err %v)", cleared, err)
@@ -224,7 +225,7 @@ func TestDeleteThread(t *testing.T) {
 	})
 
 	t.Run("deleting the last thread only clears it", func(t *testing.T) {
-		m.SaveMessage(ctx, guildID, "1", "user", "legacy")
+		m.SaveMessage(ctx, guildID, "1", llm.RoleUser, "legacy")
 		cleared, err := m.DeleteThread(ctx, guildID, charID, "1")
 		if err != nil || !cleared {
 			t.Fatalf("expected a clear, got cleared=%v (err %v)", cleared, err)
@@ -308,7 +309,7 @@ func TestCountCharacterThreads(t *testing.T) {
 	m.SetActiveCharacter(ctx, "guild1", "char2")
 
 	// Legacy history (no threads rows yet) counts as zero until promoted.
-	m.SaveMessage(ctx, "guild1", "thread-a", "user", "for char2")
+	m.SaveMessage(ctx, "guild1", "thread-a", llm.RoleUser, "for char2")
 	count, err := m.CountCharacterThreads(ctx, "guild1", "char1")
 	if err != nil || count != 0 {
 		t.Errorf("expected 0 for char1, got %d (err %v)", count, err)

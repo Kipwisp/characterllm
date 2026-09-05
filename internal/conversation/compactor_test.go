@@ -38,8 +38,8 @@ func TestCompact_BudgetCapping(t *testing.T) {
 	}
 
 	// The configured summary cap (20 tokens) must be injected into the prompt as a word limit.
-	if !strings.Contains(capturedMessages[0].Content, "15 words") {
-		t.Errorf("Expected injected length limit of '15 words' in compaction prompt, got: %s", capturedMessages[0].Content)
+	if !strings.Contains(capturedMessages[0].Text(), "15 words") {
+		t.Errorf("Expected injected length limit of '15 words' in compaction prompt, got: %s", capturedMessages[0].Text())
 	}
 }
 

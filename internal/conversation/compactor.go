@@ -74,7 +74,7 @@ func (c *Compactor) Compact(ctx context.Context, guildID, threadID, charID, reqI
 	}
 
 	// Compaction Budgeting (Safety)
-	promptMsg := llm.Message{Role: "system", Content: c.compactionPrompt()}
+	promptMsg := llm.TextMessage(llm.RoleSystem, c.compactionPrompt())
 
 	// Reserve room for the summary output so the full request fits the context window
 	maxContext := c.cfg.LLM.MaxContext
@@ -89,7 +89,7 @@ func (c *Compactor) Compact(ctx context.Context, guildID, threadID, charID, reqI
 		return
 	}
 	if summary != "" {
-		summaryMsg := llm.Message{Role: "user", Content: "Previous conversation summary:\n" + summary}
+		summaryMsg := llm.TextMessage(llm.RoleUser, "Previous conversation summary:\n"+summary)
 		summaryMsgTokens := c.llm.EstimateTokens(ctx, []llm.Message{summaryMsg})
 		if summaryMsgTokens <= budget {
 			messagesToSummarize = append(messagesToSummarize, summaryMsg)
@@ -118,7 +118,7 @@ func (c *Compactor) Compact(ctx context.Context, guildID, threadID, charID, reqI
 	}
 	latency := time.Since(start)
 
-	summaryTokens := c.llm.EstimateTokens(ctx, []llm.Message{{Role: "user", Content: summary}})
+	summaryTokens := c.llm.EstimateTokens(ctx, []llm.Message{llm.TextMessage(llm.RoleUser, summary)})
 	if summaryTokens > c.cfg.LLM.SummaryMaxTokens {
 		logger.FromContext(ctx).Warn("summary exceeds configured token cap", "summary_tokens", summaryTokens, "cap", c.cfg.LLM.SummaryMaxTokens)
 	}

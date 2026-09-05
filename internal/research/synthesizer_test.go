@@ -163,7 +163,7 @@ func TestSynthesizer_ScenarioBlock(t *testing.T) {
 		var captured string
 		mockLLM, _ := queueLLM([]string{"### Identity & Temperament\nspec"}, []string{"r"})
 		mockLLM.GenerateResponseFn = func(ctx context.Context, msgs []llm.Message, model string) (string, string, error) {
-			captured = msgs[0].Content
+			captured = msgs[0].Text()
 			return "### Identity & Temperament\nspec", "r", nil
 		}
 		s := NewSynthesizer(mockSearch, mockLLM, cfg, ps, nil)
@@ -255,8 +255,8 @@ func TestSynthesizer_RewriteSection(t *testing.T) {
 	var capturedSystem, capturedPrompt string
 	mockLLM := &mocks.MockLLMClient{
 		GenerateResponseFn: func(ctx context.Context, msgs []llm.Message, model string) (string, string, error) {
-			capturedSystem = msgs[0].Content
-			capturedPrompt = msgs[1].Content
+			capturedSystem = msgs[0].Text()
+			capturedPrompt = msgs[1].Text()
 			return "### Voice & Habits\nFast cadence, warm wit.", "rewrote it", nil
 		},
 	}
@@ -315,7 +315,7 @@ func TestSynthesizer_RewriteSection(t *testing.T) {
 
 	t.Run("Whole persona rewrite returns the full spec", func(t *testing.T) {
 		mockLLM.GenerateResponseFn = func(ctx context.Context, msgs []llm.Message, model string) (string, string, error) {
-			capturedPrompt = msgs[1].Content
+			capturedPrompt = msgs[1].Text()
 			return "### Identity & Temperament\nPerpetually upbeat.\n\n### Appearance\nHuman.\n\n### Voice & Habits\nBright cadence.\n\n### Example Dialogue\n<START>\nUser: Hi\nCharacter: Hey!\n<END>\n", "ok", nil
 		}
 		res, err := s.RewriteSection(context.Background(), SectionRewriteRequest{
@@ -372,7 +372,7 @@ func TestSynthesizer_RewriteSection_InjectsSectionReference(t *testing.T) {
 	var capturedPrompt string
 	mockLLM := &mocks.MockLLMClient{
 		GenerateResponseFn: func(ctx context.Context, msgs []llm.Message, model string) (string, string, error) {
-			capturedPrompt = msgs[1].Content
+			capturedPrompt = msgs[1].Text()
 			return "Hey, it's me.", "ok", nil
 		},
 	}
@@ -408,7 +408,7 @@ func TestSynthesizer_RewriteSection_ScenarioReferenceIsCanned(t *testing.T) {
 	var capturedPrompt string
 	mockLLM := &mocks.MockLLMClient{
 		GenerateResponseFn: func(ctx context.Context, msgs []llm.Message, model string) (string, string, error) {
-			capturedPrompt = msgs[1].Content
+			capturedPrompt = msgs[1].Text()
 			return "Stuck in a rainy city.", "ok", nil
 		},
 	}
@@ -470,8 +470,8 @@ func TestSynthesizer_AvatarPick(t *testing.T) {
 		var capturedPrompt string
 		mockLLM := &mocks.MockLLMClient{
 			GenerateResponseFn: func(ctx context.Context, msgs []llm.Message, model string) (string, string, error) {
-				capturedImages = msgs[0].Images
-				capturedPrompt = msgs[0].Content
+				capturedImages = msgs[0].ImageURIs()
+				capturedPrompt = msgs[0].Text()
 				return "AVATAR: 3\n### Identity & Temperament\nDetailed spec", "r", nil
 			},
 		}
@@ -506,8 +506,8 @@ func TestSynthesizer_AvatarPick(t *testing.T) {
 		var capturedPrompt string
 		mockLLM := &mocks.MockLLMClient{
 			GenerateResponseFn: func(ctx context.Context, msgs []llm.Message, model string) (string, string, error) {
-				capturedImages = msgs[0].Images
-				capturedPrompt = msgs[0].Content
+				capturedImages = msgs[0].ImageURIs()
+				capturedPrompt = msgs[0].Text()
 				return "### Identity & Temperament\nDetailed spec", "r", nil
 			},
 		}
@@ -586,11 +586,11 @@ func TestSynthesizer_AvatarPreFilter(t *testing.T) {
 			GenerateResponseFn: func(ctx context.Context, msgs []llm.Message, model string) (string, string, error) {
 				callCount++
 				if callCount == 1 {
-					selectPrompt = msgs[0].Content
+					selectPrompt = msgs[0].Text()
 					return pickReply, "pick reasoning", nil
 				}
-				synthPrompt = msgs[0].Content
-				synthImages = msgs[0].Images
+				synthPrompt = msgs[0].Text()
+				synthImages = msgs[0].ImageURIs()
 				return synthReply, "synth reasoning", nil
 			},
 		}
@@ -658,8 +658,8 @@ func TestSynthesizer_AvatarPreFilter(t *testing.T) {
 			GenerateResponseFn: func(ctx context.Context, msgs []llm.Message, model string) (string, string, error) {
 				callCount++
 				if callCount == 1 {
-					selectPrompt = msgs[0].Content
-					selectImages = msgs[0].Images
+					selectPrompt = msgs[0].Text()
+					selectImages = msgs[0].ImageURIs()
 					return "PICK: 1\nAVATARS: none", "r", nil
 				}
 				return "### Identity & Temperament\nspec", "r", nil
@@ -763,7 +763,7 @@ func queueSynthLLM(pickReply, synthReply string) (*mocks.MockLLMClient, *string)
 			if callCount == 1 {
 				return pickReply, "pick reasoning", nil
 			}
-			capturedPrompt = msgs[0].Content
+			capturedPrompt = msgs[0].Text()
 			return synthReply, "synth reasoning", nil
 		},
 	}
